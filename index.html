@@ -320,7 +320,6 @@
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
-        import { Water } from 'three/addons/objects/Water.js';
 
         /* ------------------------------ config ------------------------------ */
         const GLB_URL = 'yacht.glb';
@@ -387,23 +386,10 @@ rgbeLoader.load('sunset.hdr', function (texture) {
             depthTest: true,
             depthWrite: true,
         });
-        const waterGeometry = new THREE.PlaneGeometry(200, 200);
-const water = new Water(
-    waterGeometry,
-    {
-        textureWidth: 512,
-        textureHeight: 512,
-        waterNormals: new THREE.TextureLoader().load('waternormals.jpg'), // скачайте normal map
-        sunDirection: sunDir.clone(),
-        sunColor: 0xffffff,
-        waterColor: 0x001e0f,
-        distortionScale: 3.7,
-        fog: scene.fog !== undefined
-    }
-);
-water.rotation.x = -Math.PI / 2;
-water.position.y = 0;
-scene.add(water);
+        const seaMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), seaMat);
+        seaMesh.frustumCulled = false;
+        seaMesh.renderOrder = -1;
+        scene.add(seaMesh);
 
         /* ------------------------------ wave height (JS mirror of shader map) ------------------------------ */
         const fract = x => x - Math.floor(x);
@@ -672,10 +658,6 @@ scene.add(water);
             let dt = (now - last) / 1000;
             last = now;
             dt = Math.min(dt, 0.05);
-            // Если вы используете Water, а не raymarch-воду
-if (water) {
-    water.material.uniforms.time.value += dt;
-}
 
             /* --- physics --- */
             const turn = 1.35,
