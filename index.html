@@ -383,7 +383,7 @@ modelInfo.innerHTML = 'model: <b>procedural</b>';
     wrap.rotation.y = GLB_YAW_OFFSET;
     // recompute to sit its keel a touch below the waterline
     const box2 = new THREE.Box3().setFromObject(wrap);
-    wrap.position.y -= box2.min.y + 0.12;
+    wrap.position.y -= box2.min.y + 2.12;
     scene.remove(boat);
     boat = wrap;
     scene.add(boat);
