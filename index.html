@@ -666,9 +666,9 @@
             // temporal smoothing removes the jitter
             B.renderY = damp(B.renderY, targetY, dt, 0.06);
             B.pitch = damp(B.pitch, targetPitch, dt, 0.08);
-            B.roll = damp(B.roll, targetRoll, dt, 0.18);
+            B.roll = damp(B.roll, targetRoll, dt, 0.08);
             // gentle idle bob so it never looks frozen
-            const bob = Math.sin(time * 1.1) * 0.015;
+            const bob = Math.sin(time * 1.1) * 0.005;
 
             boat.position.set(B.x, B.renderY + 6.00 + bob, B.z);
             boat.rotation.set(0, 0, 0);
