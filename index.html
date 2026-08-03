@@ -319,6 +319,7 @@
     <script type="module">
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
         /* ------------------------------ config ------------------------------ */
         const GLB_URL = 'yacht.glb';
@@ -336,14 +337,9 @@
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 3000);
 
-const rgbeLoader = new THREE.RGBELoader();
-rgbeLoader.load('sunset.hdr', function (texture) {
-    texture.mapping = THREE.EquirectangularReflectionMapping;
-    scene.environment = texture;
-    scene.background = texture; // опционально
-
-    // Теперь применяем отражения к лодке
-    // Предположим, лодка уже создана и находится в переменной `boat`
+// Функция для применения envMap к текущей лодке
+function applyEnvMapToBoat() {
+    if (!scene.environment || !boat) return;
     boat.traverse((child) => {
         if (child.isMesh) {
             child.material.envMap = scene.environment;
@@ -353,6 +349,17 @@ rgbeLoader.load('sunset.hdr', function (texture) {
             child.material.needsUpdate = true;
         }
     });
+}
+
+// Загрузка HDRI
+const rgbeLoader = new RGBELoader();
+rgbeLoader.load('sunset.hdr', function (texture) {
+    texture.mapping = THREE.EquirectangularReflectionMapping;
+    scene.environment = texture;
+    scene.background = texture; // опционально
+    applyEnvMapToBoat(); // применяем к уже существующей лодке
+}, undefined, function (err) {
+    console.warn('[HDRI] sunset.hdr not found – reflections disabled.', err);
 });
 
         /* ------------------------------ lights ------------------------------ */
@@ -506,40 +513,37 @@ rgbeLoader.load('sunset.hdr', function (texture) {
         modelInfo.innerHTML = 'model: <b>procedural</b>';
 
         /* ------------------------------ try to load yacht.glb ------------------------------ */
-        (function tryLoadGLB() {
-            const loader = new GLTFLoader();
-            loader.load(GLB_URL, gltf => {
-                const model = gltf.scene;
-                // normalize: center + scale to target length + drop onto waterline
-                const box = new THREE.Box3().setFromObject(model);
-                const size = new THREE.Vector3();
-                box.getSize(size);
-                const center = new THREE.Vector3();
-                box.getCenter(center);
-                const maxAxis = Math.max(size.x, size.y, size.z) || 1;
-                const s = GLB_TARGET_LENGTH / maxAxis;
-                model.position.sub(center); // center at origin
-                const wrap = new THREE.Group();
-                wrap.add(model);
-                wrap.scale.setScalar(s);
-                wrap.rotation.y = GLB_YAW_OFFSET;
-                // recompute to sit its keel a touch below the waterline
-                const box2 = new THREE.Box3().setFromObject(wrap);
-                // ★★★★★ 修复：将模型底部抬升到水面以上 ★★★★★
-                // 原来: wrap.position.y -= box2.min.y + 0.12;
-                // 改为: 将模型底部对齐到 y = 0.15  (0.12 → 0.40 提升约0.28单位)
-                const RAISE_AMOUNT = 25.40; // 增大此值可将模型抬得更高
-                wrap.position.y -= box2.min.y + RAISE_AMOUNT;
+// Загрузка GLB
+(function tryLoadGLB() {
+    const loader = new GLTFLoader();
+    loader.load(GLB_URL, gltf => {
+        const model = gltf.scene;
+        const box = new THREE.Box3().setFromObject(model);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+        const maxAxis = Math.max(size.x, size.y, size.z) || 1;
+        const s = GLB_TARGET_LENGTH / maxAxis;
+        model.position.sub(center);
+        const wrap = new THREE.Group();
+        wrap.add(model);
+        wrap.scale.setScalar(s);
+        wrap.rotation.y = GLB_YAW_OFFSET;
+        const box2 = new THREE.Box3().setFromObject(wrap);
+        const RAISE_AMOUNT = 0.12; // ИСПРАВЛЕНО
+        wrap.position.y -= box2.min.y + RAISE_AMOUNT;
 
-                scene.remove(boat);
-                boat = wrap;
-                scene.add(boat);
-                modelInfo.innerHTML = 'model: <b>yacht.glb</b> ✓';
-                console.log('[yacht] loaded yacht.glb');
-            }, undefined, err => {
-                console.log('[yacht] yacht.glb not found — using procedural model.');
-            });
-        })();
+        scene.remove(boat);
+        boat = wrap;
+        scene.add(boat);
+        applyEnvMapToBoat(); // применяем отражения к новой модели
+        modelInfo.innerHTML = 'model: <b>yacht.glb</b> ✓';
+        console.log('[yacht] loaded yacht.glb');
+    }, undefined, err => {
+        console.log('[yacht] yacht.glb not found — using procedural model.');
+    });
+})();
 
         /* ------------------------------ foam wake (flat ribbon) ------------------------------ */
         const NSEG = 200; // max centreline samples
