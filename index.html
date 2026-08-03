@@ -670,7 +670,7 @@
             // gentle idle bob so it never looks frozen
             const bob = Math.sin(time * 1.1) * 0.015;
 
-            boat.position.set(B.x, B.renderY + 2.06 + bob, B.z);
+            boat.position.set(B.x, B.renderY + 1.66 + bob, B.z);
             boat.rotation.set(0, 0, 0);
             boat.rotation.order = 'YXZ';
             boat.rotation.y = B.heading;
