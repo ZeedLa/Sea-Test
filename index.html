@@ -336,6 +336,14 @@
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 3000);
 
+        // Загрузка HDRI
+const rgbeLoader = new THREE.RGBELoader();
+rgbeLoader.load('sunset.hdr', (texture) => {
+    texture.mapping = THREE.EquirectangularReflectionMapping;
+    scene.environment = texture;
+    scene.background = texture; // если хотите, чтобы фон тоже был HDRI
+});
+
         /* ------------------------------ lights ------------------------------ */
         const sunDir = new THREE.Vector3(0, 1, 0.8).normalize();
         const sun = new THREE.DirectionalLight(0xfff4e2, 2.1);
