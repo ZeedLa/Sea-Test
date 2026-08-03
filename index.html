@@ -322,7 +322,7 @@
 
         /* ------------------------------ config ------------------------------ */
         const GLB_URL = 'yacht.glb';
-        const GLB_TARGET_LENGTH = 6.6; // model is scaled so its longest axis = this
+        const GLB_TARGET_LENGTH = 12.6; // model is scaled so its longest axis = this
         const GLB_YAW_OFFSET = 0.0; // radians; set to Math.PI if your model faces -Z
         const QUALITY = 0.9; // render scale (lower = faster)
 
@@ -670,7 +670,7 @@
             // gentle idle bob so it never looks frozen
             const bob = Math.sin(time * 1.1) * 0.015;
 
-            boat.position.set(B.x, B.renderY + 3.00 + bob, B.z);
+            boat.position.set(B.x, B.renderY + 6.00 + bob, B.z);
             boat.rotation.set(0, 0, 0);
             boat.rotation.order = 'YXZ';
             boat.rotation.y = B.heading;
