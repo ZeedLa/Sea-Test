@@ -509,7 +509,7 @@
                 // ★★★★★ 修复：将模型底部抬升到水面以上 ★★★★★
                 // 原来: wrap.position.y -= box2.min.y + 0.12;
                 // 改为: 将模型底部对齐到 y = 0.15  (0.12 → 0.40 提升约0.28单位)
-                const RAISE_AMOUNT = 10.40; // 增大此值可将模型抬得更高
+                const RAISE_AMOUNT = 5.40; // 增大此值可将模型抬得更高
                 wrap.position.y -= box2.min.y + RAISE_AMOUNT;
 
                 scene.remove(boat);
