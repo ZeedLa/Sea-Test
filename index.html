@@ -106,6 +106,7 @@
         uniform vec3 uCamPos;
         uniform mat4 uInvProjView;
         uniform mat4 uProjView;
+        uniform sampler2D uReflection;
 
         /* ===== Seascape by Alexander Alekseev aka TDM (2014), CC BY-NC-SA 3.0 ===== */
         const int NUM_STEPS = 32;
@@ -183,7 +184,12 @@
         vec3 getSeaColor(vec3 p, vec3 n, vec3 l, vec3 eye, vec3 dist) {
             float fresnel = clamp(1.0 - dot(n, -eye), 0.0, 1.0);
             fresnel = min(fresnel * fresnel * fresnel, 0.5);
-            vec3 reflected = getSkyColor(reflect(eye, n));
+            // Стало:
+vec3 reflected = getSkyColor(reflect(eye, n));
+// Смешиваем с текстурой отражения
+vec2 reflUV = gl_FragCoord.xy / uRes; // или используйте координаты отражённого вида
+vec3 reflColor = texture(uReflection, reflUV).rgb;
+reflected = mix(reflected, reflColor, 0.6); // 0.6 - сила отражения
             vec3 refracted = SEA_BASE + diffuse(n, l, 80.0) * SEA_WATER_COLOR * 0.12;
             vec3 color = mix(refracted, reflected, fresnel);
             float atten = max(1.0 - dot(dist, dist) * 0.001, 0.0);
@@ -336,6 +342,15 @@
 
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 3000);
+
+        const reflectionTarget = new THREE.WebGLRenderTarget(
+    window.innerWidth * 0.5,
+    window.innerHeight * 0.5,
+    { minFilter: THREE.LinearMipmapLinear, magFilter: THREE.Linear, format: THREE.RGBAFormat }
+);
+
+const reflectionCamera = camera.clone();
+reflectionCamera.matrixAutoUpdate = false;
 
 // Функция для применения envMap к текущей лодке
 function applyEnvMapToBoat() {
@@ -700,6 +715,33 @@ rgbeLoader.load('sunset.hdr', function (texture) {
             boat.rotation.x = B.pitch;
             boat.rotation.z = B.roll;
 
+            // --- отражение ---
+const waterLevel = 0; // уровень воды (y=0)
+const camPos = camera.position;
+const distToWater = camPos.y - waterLevel;
+reflectionCamera.position.set(camPos.x, waterLevel - distToWater, camPos.z);
+reflectionCamera.quaternion.copy(camera.quaternion);
+reflectionCamera.updateMatrixWorld(true);
+
+// Отражаем лодку по Y (чтобы она была под водой)
+const savedY = boat.position.y;
+boat.position.y = waterLevel - (boat.position.y - waterLevel);
+boat.rotation.x = -boat.rotation.x; // отражаем pitch
+boat.rotation.z = -boat.rotation.z; // отражаем roll
+
+// Рендерим сцену в текстуру (без воды, чтобы не было бесконечного отражения)
+const seaVisible = seaMesh.visible;
+seaMesh.visible = false;
+renderer.setRenderTarget(reflectionTarget);
+renderer.render(scene, reflectionCamera);
+renderer.setRenderTarget(null);
+seaMesh.visible = seaVisible;
+
+// Возвращаем лодку на место
+boat.position.y = savedY;
+boat.rotation.x = -boat.rotation.x;
+boat.rotation.z = -boat.rotation.z;
+
             /* --- foam wake (flat ribbon that sits on the water) --- */
             const spd = Math.abs(B.speed);
             // point behind the transom where the wake is born
@@ -773,10 +815,15 @@ rgbeLoader.load('sunset.hdr', function (texture) {
             seaUniforms.uCamPos.value.copy(camera.position);
             seaUniforms.uProjView.value.copy(_pv);
             seaUniforms.uInvProjView.value.copy(_pv).invert();
+            seaUniforms.uReflection.value = reflectionTarget.texture;
+            uReflection: { value: null },
+};
+            
 
             /* --- render --- */
             renderer.clear(true, true, true);
             renderer.render(scene, camera);
+    
 
             spdEl.textContent = (spd * 3.5).toFixed(1);
             requestAnimationFrame(frame);
