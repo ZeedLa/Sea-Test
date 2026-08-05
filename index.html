@@ -25,6 +25,20 @@ html, body { margin:0; height:100%; overflow:hidden; background:#04121e;
 
 #tag { position:fixed; left:14px; bottom:12px; font-size:11px; opacity:.6; user-select:none; }
 
+/* ---- прелоадер ---- */
+#loader { position:fixed; inset:0; z-index:100; background:#04121e;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:16px; transition:opacity .7s; }
+#loader.hidden { opacity:0; pointer-events:none; }
+#loader img { max-width:min(70vw,420px); max-height:60vh; border-radius:12px; }
+#loader-text { font-size:14px; opacity:.75; letter-spacing:.05em; }
+#loader-bar { width:min(60vw,300px); height:3px; border-radius:2px;
+  background:rgba(140,190,230,.2); overflow:hidden; }
+#loader-bar i { display:block; height:100%; width:40%; border-radius:2px;
+  background:#8fd0ff; animation:ldr 1.1s ease-in-out infinite; }
+@keyframes ldr { 0%{transform:translateX(-100%)} 100%{transform:translateX(260%)} }
+
+/* ---- карточка POI ---- */
 #poi { position:fixed; right:18px; top:50%; width:320px; max-width:80vw;
   transform:translateY(-50%) translateX(130%); opacity:0;
   transition:transform .45s cubic-bezier(.2,.9,.25,1), opacity .45s;
@@ -35,10 +49,21 @@ html, body { margin:0; height:100%; overflow:hidden; background:#04121e;
 #poi img { width:100%; height:170px; object-fit:cover; display:block; background:#0a2236; }
 #poi-title { font-size:16px; font-weight:600; color:#8fd0ff; padding:12px 14px 4px; }
 #poi-text  { font-size:13px; line-height:1.45; padding:0 14px 14px; opacity:.9; }
+
+/* ---- стрелки к точкам интереса ---- */
+.poi-arrow { position:fixed; left:0; top:0; z-index:4; pointer-events:none;
+  filter: drop-shadow(0 0 6px rgba(255,165,60,.55)); will-change:transform; }
 </style>
 </head>
 <body>
 <canvas id="gl"></canvas>
+
+<!-- прелоадер: положите рядом preload.png -->
+<div id="loader">
+  <img id="loader-img" src="preload.png" alt="" onerror="this.style.display='none'" />
+  <div id="loader-text">Загрузка мира…</div>
+  <div id="loader-bar"><i></i></div>
+</div>
 
 <div class="hud">
   <div style="font-size:15px;margin-bottom:6px"><b>⛵ Seascape — bigmap</b></div>
@@ -50,13 +75,13 @@ html, body { margin:0; height:100%; overflow:hidden; background:#04121e;
   <span class="key">V</span> ракурс камеры (зафиксирована)<br />
   <span class="key">C</span> отладка: форма коллизий и зоны<br />
   <span class="key">X</span> вкл/выкл коллизии<br />
-  Подплывайте к <b>оранжевым буям</b> — откроется информация о точке.<br />
-  <span style="opacity:.75">Зелёная вспышка рамки = граница зоны <b>water</b>.</span>
+  Точки: <b id="poi-count">—</b> — стрелки у края экрана ведут к ним.<br />
+  Пунктир из огоньков — маршрут (<b>way</b>).
   <div id="model" style="margin-top:6px;opacity:.75"></div>
 </div>
 
 <div id="speed">скорость&nbsp; <b id="spd">0.0</b> kn</div>
-<div id="tag">Рядом должны лежать <b>bigmap.glb</b> и (опционально) <b>yacht.glb</b>.</div>
+<div id="tag">Рядом: <b>bigmap.glb</b>, <b>yacht.glb</b>, <b>preload.png</b>.</div>
 
 <div id="poi">
   <img id="poi-img" alt="" />
@@ -87,7 +112,7 @@ const float EPSILON = 1e-3;
 const int ITER_GEOMETRY = 3;
 const int ITER_FRAGMENT = 5;
 const float SEA_HEIGHT = 0.6;
-const float SEA_CHOPPY = 8.0;
+const float SEA_CHOPPY = 4.0;
 const float SEA_SPEED = 0.8;
 const float SEA_FREQ = 0.16;
 const vec3 SEA_BASE = vec3(0.0, 0.09, 0.18);
@@ -271,7 +296,6 @@ const BIGMAP_URL = 'Bigmap.glb';
 const QUALITY    = 0.9;
 
 const GLB_TARGET_LENGTH = 12.6;
-const PROCEDURAL_BOAT_SCALE = 1.0;
 const GLB_YAW_OFFSET = 0.0;
 
 const BOAT_WATER_OFFSET = 6.35;
@@ -282,9 +306,19 @@ const USE_WATER_BOUNDS = true;
 
 const POI_RADIUS = 7.0;
 
-/* ---- BLOOM ---- */
-const BLOOM_STRENGTH  = 0.35;
-const BLOOM_RADIUS    = 0.9;
+/* бегущие точки по маршруту way */
+const WAY_SPEED = 2.2;      // скорость бега точек, м/с
+const WAY_GAP   = 4.0;      // расстояние между точками пунктира
+
+/* кольца от точек интереса */
+const RING_PERIOD = 6.0;    // сек на одну волну
+const RING_MAX = 30;        // максимальный радиус кольца
+
+/* стрелки у края экрана */
+const ARROW_MARGIN = 48;    // отступ от края экрана, px
+
+const BLOOM_STRENGTH  = 0.25;
+const BLOOM_RADIUS    = 0.6;
 const BLOOM_THRESHOLD = 0.80;
 
 const POI_DATA = {
@@ -298,10 +332,25 @@ const POI_DATA = {
 
 const CAMERA_LOCKED = true;
 const CAM_PRESETS = {
-  iso:   { pitch: 0.95, dist: 134, fov: 35, followHeading: false },
+  iso:   { pitch: 0.95, dist: 34, fov: 35, followHeading: false },
   chase: { pitch: 0.34, dist: 12, fov: 55, followHeading: true  },
 };
 let camMode = 'iso';
+
+/* ============================ ПРЕЛОАДЕР ============================ */
+const loaderEl = document.getElementById('loader');
+let assetsPending = 2, loaderDone = false;   // yacht.glb + bigmap.glb
+function assetSettled(){
+  assetsPending--;
+  if (assetsPending <= 0) hideLoader();
+}
+function hideLoader(){
+  if (loaderDone) return;
+  loaderDone = true;
+  loaderEl.classList.add('hidden');
+  setTimeout(() => loaderEl.remove(), 900);
+}
+setTimeout(hideLoader, 20000); // страховка
 
 /* ============================ three-mesh-bvh ============================ */
 const bvhPromise = import('https://unpkg.com/three-mesh-bvh@0.7/build/index.module.js').then(mod => {
@@ -324,9 +373,7 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(CAM_PRESETS.iso.fov, innerWidth/innerHeight, 0.1, 3000);
 
-/* ============================ постобработка: BLOOM + FXAA ============================
-   ВАЖНО: без samples (MSAA) — мультисемплинг в связке с gl_FragDepth и HalfFloat
-   на части GPU даёт мерцающие чёрные прямоугольники. Сглаживание делает FXAA. */
+/* ============================ постобработка ============================ */
 const composerRT = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType });
 const composer = new EffectComposer(renderer, composerRT);
 composer.setPixelRatio(renderer.getPixelRatio());
@@ -338,7 +385,6 @@ composer.addPass(bloomPass);
 composer.addPass(new OutputPass());
 const fxaaPass = new ShaderPass(FXAAShader);
 composer.addPass(fxaaPass);
-
 function updateFXAAResolution(){
   const pr = renderer.getPixelRatio();
   fxaaPass.material.uniforms['resolution'].value.set(1/(innerWidth*pr), 1/(innerHeight*pr));
@@ -361,13 +407,16 @@ let activePoi = null;
 let collisionsEnabled = true;
 let gTime = 0;
 
+/* маршрут way */
+let wayDots = null, wayPts = null, wayTotal = 0, wayOffset = 0;
+
 const debugGroup = new THREE.Group();
 debugGroup.visible = false;
 scene.add(debugGroup);
 const colliderDebug = new THREE.Group();
 debugGroup.add(colliderDebug);
 
-/* ============================ ПЕНА НА ПЕРЕСЕЧЕНИИ С ВОДОЙ ============================ */
+/* ============================ ПЕНА (уменьшенная полоса) ============================ */
 const foamUniforms = {
   uTimeF:     { value: 0 },
   uSeaLevelF: { value: 0 },
@@ -412,21 +461,23 @@ float foamFbm(vec2 p){
 }
 `;
 
+/* Полоса пены: узкая (примерно -0.12..+0.24 от линии воды) и неплотная.
+   Хотите ещё тоньше — уменьшите 0.22 и 0.45; совсем убрать "кайму" — fLine. */
 const FOAM_APPLY = `
 {
   float fwY = waterHeightAt(vFoamWorld.xz);
   float fD  = vFoamWorld.y - fwY;
-  float fBand  = smoothstep(-0.35, 0.0, fD) * (1.0 - smoothstep(0.04, 0.55, fD));
-  float fNoise = foamFbm(vFoamWorld.xz * 0.9 + vec2(fwY * 1.2, uTimeF * 0.45)) * 0.5 + 0.5;
-  float fBreak = smoothstep(0.45, 0.80, fNoise + 0.35 * fBand);
-  float fLine  = 1.0 - smoothstep(0.0, 0.09, abs(fD));
-  float fMask  = clamp(fBand * fBreak + fLine * 0.7 * smoothstep(-1.0, -0.05, fD), 0.0, 1.0);
+  float fBand  = smoothstep(-0.12, 0.0, fD) * (1.0 - smoothstep(0.02, 0.22, fD));
+  float fNoise = foamFbm(vFoamWorld.xz * 1.1 + vec2(fwY * 1.2, uTimeF * 0.45)) * 0.5 + 0.5;
+  float fBreak = smoothstep(0.50, 0.85, fNoise + 0.30 * fBand);
+  float fLine  = 1.0 - smoothstep(0.0, 0.05, abs(fD));
+  float fMask  = clamp(fBand * fBreak + fLine * 0.45 * smoothstep(-0.6, -0.02, fD), 0.0, 1.0);
   if (fMask > 0.01){
     vec3 fCol = mix(vec3(0.70, 0.82, 0.92), vec3(1.0), clamp(fNoise, 0.0, 1.0));
-    gl_FragColor.rgb = mix(gl_FragColor.rgb, fCol, fMask * 0.95);
+    gl_FragColor.rgb = mix(gl_FragColor.rgb, fCol, fMask * 0.85);
   }
-  float fWet = (1.0 - smoothstep(0.12, 0.9, fD)) * (1.0 - fMask);
-  gl_FragColor.rgb *= 1.0 - 0.16 * fWet;
+  float fWet = (1.0 - smoothstep(0.08, 0.5, fD)) * (1.0 - fMask);
+  gl_FragColor.rgb *= 1.0 - 0.10 * fWet;
 }
 `;
 
@@ -531,58 +582,15 @@ function seaHeightJS(x, z, time){
   return seaLevel + h;
 }
 
-/* ============================ процедурная лодка (запасная) ============================ */
-function buildProceduralBoat(){
-  const g = new THREE.Group();
-  const white  = new THREE.MeshStandardMaterial({ color:0xeef2f6, roughness:.5, metalness:.05 });
-  const red    = new THREE.MeshStandardMaterial({ color:0xb01f22, roughness:.5 });
-  const teak   = new THREE.MeshStandardMaterial({ color:0x8a6a3f, roughness:.7 });
-  const cabinM = new THREE.MeshStandardMaterial({ color:0xd8dee6, roughness:.4, metalness:.1 });
-  const spar   = new THREE.MeshStandardMaterial({ color:0x5b3f22, roughness:.6 });
-  const sailM  = new THREE.MeshStandardMaterial({ color:0xf3f2ec, roughness:.85, side:THREE.DoubleSide });
-
-  const hull = new THREE.Mesh(new THREE.SphereGeometry(1,40,28), white);
-  hull.scale.set(0.5,0.42,1.75); g.add(hull);
-  const boot = new THREE.Mesh(new THREE.SphereGeometry(1.005,40,10,0,Math.PI*2,Math.PI*0.42,Math.PI*0.16), red);
-  boot.scale.set(0.5,0.42,1.75); g.add(boot);
-  const deck = new THREE.Mesh(new THREE.CapsuleGeometry(0.34,2.6,4,16), teak);
-  deck.rotation.x = Math.PI/2; deck.position.y = 0.14; deck.scale.set(1.25,1,0.62); g.add(deck);
-
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(0.6,0.34,1.1), cabinM);
-  cabin.position.set(0,0.32,-0.55); g.add(cabin);
-
-  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.035,0.045,2.0,12), spar);
-  mast.position.set(0,1.05,0.1); g.add(mast);
-  const boom = new THREE.Mesh(new THREE.CylinderGeometry(0.03,0.03,1.7,10), spar);
-  boom.rotation.x = Math.PI/2; boom.position.set(0,0.42,-0.35); g.add(boom);
-
-  const mainGeo = new THREE.PlaneGeometry(1.1,1.5,12,12);
-  const mp = mainGeo.attributes.position;
-  for (let i=0;i<mp.count;i++){
-    const y=mp.getY(i), x=mp.getX(i);
-    const t=THREE.MathUtils.clamp((y+0.75)/1.5,0,1);
-    mp.setZ(i, 0.28*(1-Math.pow(x/0.55,2))*(0.6+0.4*t));
-  }
-  mainGeo.computeVertexNormals();
-  const mainsail = new THREE.Mesh(mainGeo, sailM);
-  mainsail.rotation.y = Math.PI/2; mainsail.position.set(0,1.0,-0.3); g.add(mainsail);
-
-  const jib = new THREE.Mesh(new THREE.PlaneGeometry(0.8,1.0), sailM);
-  jib.rotation.y = Math.PI/2; jib.position.set(0,0.75,0.6); g.add(jib);
-  return g;
-}
-let boat = buildProceduralBoat();
-boat.scale.setScalar(PROCEDURAL_BOAT_SCALE);
-applyFoamToObject(boat);
-scene.add(boat);
+/* ============================ лодка (только yacht.glb) ============================ */
+let boat = null;
 
 const modelInfo = document.getElementById('model');
-let infoBoat = 'процедурная', infoMap = 'нет', infoCol = '—';
+let infoBoat = 'загрузка…', infoMap = 'нет', infoCol = '—';
 const updateInfo = () => modelInfo.innerHTML =
   `лодка: <b>${infoBoat}</b> · карта: <b>${infoMap}</b><br/>коллизии: <b>${infoCol}</b>`;
 updateInfo();
 
-/* ============================ загрузка yacht.glb ============================ */
 (function tryLoadGLB(){
   new GLTFLoader().load(GLB_URL, gltf => {
     const model = gltf.scene;
@@ -597,14 +605,136 @@ updateInfo();
     wrap.rotation.y = GLB_YAW_OFFSET;
     const box2 = new THREE.Box3().setFromObject(wrap);
     wrap.position.y -= box2.min.y + GLB_SINK;
-    scene.remove(boat);
     boat = wrap;
     scene.add(boat);
     applyEnvMapToBoat();
     applyFoamToObject(boat);
     infoBoat = 'yacht.glb ✓'; updateInfo();
-  }, undefined, () => console.log('[yacht] yacht.glb не найден — процедурная модель.'));
+    assetSettled();
+  }, undefined, err => {
+    console.warn('[yacht] yacht.glb не найден!', err);
+    infoBoat = 'yacht.glb ✗'; updateInfo();
+    assetSettled();
+  });
 })();
+
+/* ============================ way: путь из кривой ============================ */
+function makeDotTexture(){
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(32,32,0,32,32,32);
+  grad.addColorStop(0,   'rgba(255,255,255,1)');
+  grad.addColorStop(0.35,'rgba(190,230,255,0.9)');
+  grad.addColorStop(1,   'rgba(190,230,255,0)');
+  g.fillStyle = grad; g.fillRect(0,0,64,64);
+  return new THREE.CanvasTexture(c);
+}
+
+function buildWayPath(root){
+  /* 1) собираем все вершины мешей в мировых координатах */
+  const raw = [];
+  const v = new THREE.Vector3();
+  root.traverse(ch => {
+    if (ch.isMesh && ch.geometry && ch.geometry.attributes.position){
+      const pos = ch.geometry.attributes.position;
+      for (let i=0;i<pos.count;i++){
+        v.fromBufferAttribute(pos, i).applyMatrix4(ch.matrixWorld);
+        raw.push(v.clone());
+      }
+    }
+  });
+  if (raw.length < 2) return null;
+
+  /* 2) прореживаем воксельной сеткой, если вершин слишком много */
+  let pts = raw;
+  if (raw.length > 4000){
+    const bb = new THREE.Box3(); raw.forEach(p => bb.expandByPoint(p));
+    const cell = Math.max(bb.getSize(new THREE.Vector3()).length() / 1200, 1e-3);
+    const map = new Map();
+    for (const p of raw){
+      const k = Math.floor(p.x/cell)+','+Math.floor(p.y/cell)+','+Math.floor(p.z/cell);
+      if (!map.has(k)) map.set(k, p.clone());
+    }
+    pts = [...map.values()];
+  }
+
+  /* 3) упорядочиваем обходом ближайшего соседа (с хеш-сеткой) */
+  const n = pts.length;
+  const bb = new THREE.Box3(); pts.forEach(p => bb.expandByPoint(p));
+  const corner = bb.min.clone();
+  let cur = 0, bd = Infinity;
+  for (let i=0;i<n;i++){
+    const d = pts[i].distanceToSquared(corner);
+    if (d < bd){ bd = d; cur = i; }
+  }
+  const cell = Math.max(bb.getSize(new THREE.Vector3()).length()/200, 1e-3);
+  const grid = new Map();
+  pts.forEach((p,i) => {
+    const k = Math.floor(p.x/cell)+','+Math.floor(p.y/cell)+','+Math.floor(p.z/cell);
+    let a = grid.get(k); if (!a){ a = []; grid.set(k,a); } a.push(i);
+  });
+  const used = new Uint8Array(n);
+  const ordered = [];
+  for (let step=0; step<n; step++){
+    used[cur] = 1; ordered.push(pts[cur]);
+    const cx=Math.floor(pts[cur].x/cell), cy=Math.floor(pts[cur].y/cell), cz=Math.floor(pts[cur].z/cell);
+    let best=-1, bestD=Infinity;
+    outer:
+    for (let r=1; r<=5; r++){
+      for (let dx=-r; dx<=r; dx++)
+      for (let dy=-r; dy<=r; dy++)
+      for (let dz=-r; dz<=r; dz++){
+        if (Math.max(Math.abs(dx),Math.abs(dy),Math.abs(dz)) !== r) continue;
+        const arr = grid.get((cx+dx)+','+(cy+dy)+','+(cz+dz));
+        if (!arr) continue;
+        for (const idx of arr){
+          if (used[idx]) continue;
+          const d = pts[idx].distanceToSquared(pts[cur]);
+          if (d < bestD){ bestD=d; best=idx; }
+        }
+      }
+      if (best >= 0) break outer;
+    }
+    if (best < 0){
+      for (let i=0;i<n;i++){
+        if (used[i]) continue;
+        const d = pts[i].distanceToSquared(pts[cur]);
+        if (d < bestD){ bestD=d; best=i; }
+      }
+    }
+    if (best < 0) break;
+    cur = best;
+  }
+  if (ordered.length < 2) return null;
+
+  /* 4) сглаживание Чайкина x2 */
+  let path = ordered;
+  for (let it=0; it<2; it++){
+    const np = [path[0]];
+    for (let i=0;i<path.length-1;i++){
+      np.push(new THREE.Vector3().lerpVectors(path[i], path[i+1], 0.25));
+      np.push(new THREE.Vector3().lerpVectors(path[i], path[i+1], 0.75));
+    }
+    np.push(path[path.length-1]);
+    path = np;
+  }
+
+  /* 5) равномерный ресемпл по длине дуги */
+  const cum = [0];
+  for (let i=1;i<path.length;i++) cum.push(cum[i-1] + path[i].distanceTo(path[i-1]));
+  const total = cum[cum.length-1];
+  if (total < 1) return null;
+  const M = 400, out = [];
+  let seg = 0;
+  for (let j=0;j<M;j++){
+    const t = total * j/(M-1);
+    while (seg < path.length-2 && cum[seg+1] < t) seg++;
+    const span = cum[seg+1]-cum[seg] || 1e-6;
+    const f = (t - cum[seg]) / span;
+    out.push(new THREE.Vector3().lerpVectors(path[seg], path[seg+1], f));
+  }
+  return { points: out, total };
+}
 
 /* ============================ загрузка bigmap.glb ============================ */
 function placeholderImg(label){
@@ -619,6 +749,27 @@ function placeholderImg(label){
 }
 
 const markerGeo = new THREE.SphereGeometry(0.38, 18, 14);
+const ringGeo = new THREE.RingGeometry(0.96, 1.0, 128);
+
+/* стрелка у края экрана */
+function createArrowEl(){
+  const el = document.createElement('div');
+  el.className = 'poi-arrow';
+  el.innerHTML = `<svg width="34" height="34" viewBox="0 0 24 24">
+    <path d="M3 12 L20 12 M13.5 5.5 L20 12 L13.5 18.5"
+      stroke="#ffb055" stroke-width="2.6" fill="none"
+      stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  el.style.display = 'none';
+  document.body.appendChild(el);
+  return el;
+}
+
+const poiCountEl = document.getElementById('poi-count');
+function updatePoiCounter(){
+  if (!poiCountEl) return;
+  poiCountEl.textContent = pois.length
+    ? `${pois.filter(p => p.visited).length}/${pois.length}` : '—';
+}
 
 (function loadBigMap(){
   new GLTFLoader().load(BIGMAP_URL, gltf => {
@@ -658,7 +809,6 @@ const markerGeo = new THREE.SphereGeometry(0.38, 18, 14);
         });
         if (!geos.length){ console.warn('[map] Col без геометрии, пропущен:', name); return; }
         colliderDefs.push({ name, geos });
-        console.log(`[map] найден забор ${name}: мешей ${geos.length}`);
       }
 
       else if (lower === 'start'){
@@ -669,6 +819,31 @@ const markerGeo = new THREE.SphereGeometry(0.38, 18, 14);
         respawn();
       }
 
+      /* --- маршрут way: бегущие точки вместо самой линии --- */
+      else if (lower === 'way'){
+        const res = buildWayPath(o);
+        o.visible = false;
+        if (res){
+          wayPts = res.points; wayTotal = res.total;
+          const count = Math.min(140, Math.max(12, Math.round(wayTotal / WAY_GAP)));
+          const arr = new Float32Array(count*3);
+          const geo = new THREE.BufferGeometry();
+          geo.setAttribute('position', new THREE.BufferAttribute(arr,3).setUsage(THREE.DynamicDrawUsage));
+          const mat = new THREE.PointsMaterial({
+            size:0.6, map:makeDotTexture(), transparent:true, depthWrite:false,
+            blending:THREE.AdditiveBlending, color:0xcfeaff, sizeAttenuation:true });
+          wayDots = new THREE.Points(geo, mat);
+          wayDots.frustumCulled = false;
+          wayDots.renderOrder = 2;
+          wayDots.userData.count = count;
+          scene.add(wayDots);
+          console.log(`[map] way: длина ${wayTotal.toFixed(1)}, точек пунктира ${count}`);
+        } else {
+          console.warn('[map] way: не удалось построить путь (нет геометрии?)');
+        }
+      }
+
+      /* --- точки интереса + кольца + стрелки --- */
       else if (/^point\d+$/.test(lower)){
         o.visible = false;
         o.getWorldPosition(_v);
@@ -678,11 +853,29 @@ const markerGeo = new THREE.SphereGeometry(0.38, 18, 14);
             emissiveIntensity:0.9, roughness:0.4 }));
         marker.position.set(_v.x, seaLevel + 1.1, _v.z);
         scene.add(marker);
-        pois.push({ key:lower, x:_v.x, z:_v.z, marker, phase:Math.random()*6.283, data });
+
+        const rings = [];
+        for (let k=0;k<3;k++){
+          const rm = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
+            color:0xffb055, transparent:true, opacity:0, side:THREE.DoubleSide,
+            depthWrite:false, blending:THREE.AdditiveBlending }));
+          rm.rotation.x = -Math.PI/2;
+          rm.position.set(_v.x, seaLevel + 0.9, _v.z);
+          rm.renderOrder = 2;
+          scene.add(rm);
+          rings.push({ mesh: rm, phase: k * RING_PERIOD / 3 });
+        }
+
+        pois.push({
+          key:lower, x:_v.x, z:_v.z, marker,
+          phase: Math.random()*6.283, data,
+          rings, visited:false, arrowEl: createArrowEl()
+        });
       }
     });
 
     applyFoamToObject(model);
+    updatePoiCounter();
 
     if (bounds){
       const y = seaLevel + 0.15;
@@ -716,9 +909,11 @@ const markerGeo = new THREE.SphereGeometry(0.38, 18, 14);
     bvhPromise.then(ok => { buildColliders(ok); });
 
     infoMap = 'bigmap.glb ✓'; updateInfo();
+    assetSettled();
   }, undefined, err => {
     console.warn('[map] bigmap.glb не найден.', err);
     infoMap = 'не найдена ✗'; updateInfo();
+    assetSettled();
   });
 })();
 
@@ -953,7 +1148,45 @@ function updatePOI(){
     const limit = (p === activePoi) ? POI_RADIUS * 1.35 : POI_RADIUS;
     if (d < limit && d < bestD){ best = p; bestD = d; }
   }
+  if (best && !best.visited){ best.visited = true; updatePoiCounter(); }
   if (best !== activePoi){ activePoi = best; renderPoiCard(); }
+}
+
+/* ============================ стрелки к точкам у края экрана ============================ */
+const _ap = new THREE.Vector3(), _rel = new THREE.Vector3();
+function updateArrows(){
+  if (!pois.length) return;
+  const w = innerWidth, h = innerHeight;
+  const cx = w/2, cy = h/2;
+  const hw = cx - ARROW_MARGIN, hh = cy - ARROW_MARGIN;
+  for (const p of pois){
+    const el = p.arrowEl;
+    if (p.visited){ el.style.display = 'none'; continue; }
+    _ap.set(p.x, seaLevel + 1.2, p.z);
+    _rel.copy(_ap).applyMatrix4(camera.matrixWorldInverse);
+    const behind = _rel.z > 0;
+    _ap.project(camera);
+    let dx = _ap.x, dy = _ap.y;
+    if (behind){ dx = -dx; dy = -dy; }
+    const sx = (dx*0.5 + 0.5)*w;
+    const sy = (-dy*0.5 + 0.5)*h;
+    if (!behind && sx > ARROW_MARGIN && sx < w-ARROW_MARGIN &&
+        sy > ARROW_MARGIN && sy < h-ARROW_MARGIN){
+      el.style.display = 'none';   // точка видна на экране — стрелка не нужна
+      continue;
+    }
+    let vx = sx - cx, vy = sy - cy;
+    const len = Math.hypot(vx, vy);
+    if (len < 1e-4){ el.style.display = 'none'; continue; }
+    vx /= len; vy /= len;
+    const s = Math.min(hw / Math.max(Math.abs(vx), 1e-6),
+                       hh / Math.max(Math.abs(vy), 1e-6));
+    const px = cx + vx*s, py = cy + vy*s;
+    const ang = Math.atan2(vy, vx);
+    el.style.display = 'block';
+    el.style.transform =
+      `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px) translate(-50%,-50%) rotate(${ang.toFixed(3)}rad)`;
+  }
 }
 
 /* ============================ resize ============================ */
@@ -1011,12 +1244,14 @@ function frame(now){
   B.roll    = damp(B.roll,  targetRoll,  dt, 2.08);
 
   const bob = Math.sin(time*1.1)*0.005;
-  boat.position.set(B.x, B.renderY + BOAT_WATER_OFFSET + bob, B.z);
-  boat.rotation.set(0,0,0);
-  boat.rotation.order = 'YXZ';
-  boat.rotation.y = B.heading;
-  boat.rotation.x = B.pitch;
-  boat.rotation.z = B.roll;
+  if (boat){
+    boat.position.set(B.x, B.renderY + BOAT_WATER_OFFSET + bob, B.z);
+    boat.rotation.set(0,0,0);
+    boat.rotation.order = 'YXZ';
+    boat.rotation.y = B.heading;
+    boat.rotation.x = B.pitch;
+    boat.rotation.z = B.roll;
+  }
 
   /* --- кильватерный след --- */
   const spd = Math.abs(B.speed);
@@ -1049,13 +1284,36 @@ function frame(now){
   wakeGeo.attributes.aData.needsUpdate = true;
   wakeGeo.setDrawRange(0, Math.max(0, count-1)*6);
 
-  /* --- буи-маркеры --- */
+  /* --- буи, кольца POI --- */
   for (const p of pois){
     p.marker.position.set(p.x, seaLevel + 1.1 + Math.sin(time*1.6 + p.phase)*0.18, p.z);
     const s = (p === activePoi) ? 1.5 : 1.0;
     p.marker.scale.setScalar(damp(p.marker.scale.x, s, dt, 0.15));
+    for (const r of p.rings){
+      const prog = ((time + r.phase) % RING_PERIOD) / RING_PERIOD;
+      r.mesh.scale.setScalar(0.5 + prog * RING_MAX);
+      r.mesh.material.opacity = Math.pow(1 - prog, 1.6) * 0.5 * (p.visited ? 0.45 : 1);
+      r.mesh.position.set(p.x, seaLevel + 0.9, p.z);
+    }
   }
   updatePOI();
+
+  /* --- бегущие точки маршрута way --- */
+  if (wayDots && wayPts){
+    wayOffset = (wayOffset + dt * WAY_SPEED / wayTotal) % 1;
+    const arr = wayDots.geometry.attributes.position.array;
+    const cnt = wayDots.userData.count, M = wayPts.length;
+    for (let i=0;i<cnt;i++){
+      const t = (i/cnt + wayOffset) % 1;
+      const f = t * (M-1);
+      const i0 = Math.floor(f), i1 = Math.min(i0+1, M-1), ff = f - i0;
+      const p0 = wayPts[i0], p1 = wayPts[i1];
+      arr[i*3]   = p0.x + (p1.x-p0.x)*ff;
+      arr[i*3+1] = p0.y + (p1.y-p0.y)*ff + 0.2;
+      arr[i*3+2] = p0.z + (p1.z-p0.z)*ff;
+    }
+    wayDots.geometry.attributes.position.needsUpdate = true;
+  }
 
   /* --- камера --- */
   const preset = CAM_PRESETS[camMode];
@@ -1077,6 +1335,10 @@ function frame(now){
   camera.position.copy(camPos);
   camera.lookAt(tx,ty,tz);
   camera.updateMatrixWorld();
+  camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+
+  /* --- стрелки к точкам --- */
+  updateArrows();
 
   /* --- uniform'ы моря и пены --- */
   _pv.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
@@ -1088,7 +1350,6 @@ function frame(now){
   foamUniforms.uTimeF.value = time;
   foamUniforms.uSeaLevelF.value = seaLevel;
 
-  /* --- рендер через composer (bloom + fxaa) --- */
   composer.render();
   spdEl.textContent = (spd*3.5).toFixed(1);
   requestAnimationFrame(frame);
