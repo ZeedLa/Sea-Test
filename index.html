@@ -260,8 +260,10 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
 
 /* ============================ НАСТРОЙКИ ============================ */
 const GLB_URL    = 'yacht.glb';
@@ -281,9 +283,9 @@ const USE_WATER_BOUNDS = true;
 const POI_RADIUS = 7.0;
 
 /* ---- BLOOM ---- */
-const BLOOM_STRENGTH  = 0.25;  // сила свечения
-const BLOOM_RADIUS    = 0.6;   // мягкость
-const BLOOM_THRESHOLD = 0.80;  // яркость, с которой начинает светиться
+const BLOOM_STRENGTH  = 0.55;
+const BLOOM_RADIUS    = 0.6;
+const BLOOM_THRESHOLD = 0.80;
 
 const POI_DATA = {
   point1: { title:'Старый маяк',    text:'Описание точки 1. Замените текст и фото в POI_DATA.', img:'photos/point1.jpg' },
@@ -294,9 +296,6 @@ const POI_DATA = {
   point6: { title:'Скалы',          text:'Описание точки 6. Замените текст и фото в POI_DATA.', img:'photos/point6.jpg' },
 };
 
-/* ---- КАМЕРА ----
-   iso: 3/4 сверху, отдалена сильнее; chase: за лодкой.
-   CAMERA_LOCKED = true — мышь камеру не меняет. */
 const CAMERA_LOCKED = true;
 const CAM_PRESETS = {
   iso:   { pitch: 0.95, dist: 134, fov: 35, followHeading: false },
@@ -318,17 +317,17 @@ const bvhPromise = import('https://unpkg.com/three-mesh-bvh@0.7/build/index.modu
 
 /* ============================ рендерер ============================ */
 const canvas = document.getElementById('gl');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:false, powerPreference:'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) * QUALITY);
-renderer.autoClear = false;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(CAM_PRESETS.iso.fov, innerWidth/innerHeight, 0.1, 3000);
 
-/* ============================ постобработка: BLOOM ============================ */
-const composerRT = new THREE.WebGLRenderTarget(innerWidth, innerHeight,
-  { samples: 4, type: THREE.HalfFloatType });
+/* ============================ постобработка: BLOOM + FXAA ============================
+   ВАЖНО: без samples (MSAA) — мультисемплинг в связке с gl_FragDepth и HalfFloat
+   на части GPU даёт мерцающие чёрные прямоугольники. Сглаживание делает FXAA. */
+const composerRT = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType });
 const composer = new EffectComposer(renderer, composerRT);
 composer.setPixelRatio(renderer.getPixelRatio());
 composer.setSize(innerWidth, innerHeight);
@@ -337,6 +336,14 @@ const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(innerWidth, innerHeight), BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD);
 composer.addPass(bloomPass);
 composer.addPass(new OutputPass());
+const fxaaPass = new ShaderPass(FXAAShader);
+composer.addPass(fxaaPass);
+
+function updateFXAAResolution(){
+  const pr = renderer.getPixelRatio();
+  fxaaPass.material.uniforms['resolution'].value.set(1/(innerWidth*pr), 1/(innerHeight*pr));
+}
+updateFXAAResolution();
 
 /* ============================ состояние карты ============================ */
 let seaLevel = 0;
@@ -360,9 +367,7 @@ scene.add(debugGroup);
 const colliderDebug = new THREE.Group();
 debugGroup.add(colliderDebug);
 
-/* ============================ ПЕНА НА ПЕРЕСЕЧЕНИИ С ВОДОЙ ============================
-   Внедряется в материалы Landscape и лодки: считается точная высота волны
-   (копия функции моря) и в полосе у ватерлинии рисуется шумовая пена. */
+/* ============================ ПЕНА НА ПЕРЕСЕЧЕНИИ С ВОДОЙ ============================ */
 const foamUniforms = {
   uTimeF:     { value: 0 },
   uSeaLevelF: { value: 0 },
@@ -411,7 +416,6 @@ const FOAM_APPLY = `
 {
   float fwY = waterHeightAt(vFoamWorld.xz);
   float fD  = vFoamWorld.y - fwY;
-  // полоса у ватерлинии: сильна у линии воды, тает выше и глубоко под водой
   float fBand  = smoothstep(-0.35, 0.0, fD) * (1.0 - smoothstep(0.04, 0.55, fD));
   float fNoise = foamFbm(vFoamWorld.xz * 0.9 + vec2(fwY * 1.2, uTimeF * 0.45)) * 0.5 + 0.5;
   float fBreak = smoothstep(0.45, 0.80, fNoise + 0.35 * fBand);
@@ -421,7 +425,6 @@ const FOAM_APPLY = `
     vec3 fCol = mix(vec3(0.70, 0.82, 0.92), vec3(1.0), clamp(fNoise, 0.0, 1.0));
     gl_FragColor.rgb = mix(gl_FragColor.rgb, fCol, fMask * 0.95);
   }
-  // мокрая тёмная полоса чуть выше пены
   float fWet = (1.0 - smoothstep(0.12, 0.9, fD)) * (1.0 - fMask);
   gl_FragColor.rgb *= 1.0 - 0.16 * fWet;
 }
@@ -434,7 +437,7 @@ function applyFoamToObject(root){
     for (const m of mats){
       if (!m || m.userData._foam) continue;
       if (!(m.isMeshStandardMaterial || m.isMeshPhysicalMaterial)) continue;
-      if (m.transparent) continue;   // стекло и т.п. не трогаем
+      if (m.transparent) continue;
       m.userData._foam = true;
       m.onBeforeCompile = shader => {
         shader.uniforms.uTimeF     = foamUniforms.uTimeF;
@@ -598,7 +601,7 @@ updateInfo();
     boat = wrap;
     scene.add(boat);
     applyEnvMapToBoat();
-    applyFoamToObject(boat);          // пена на ватерлинии корпуса
+    applyFoamToObject(boat);
     infoBoat = 'yacht.glb ✓'; updateInfo();
   }, undefined, () => console.log('[yacht] yacht.glb не найден — процедурная модель.'));
 })();
@@ -679,7 +682,6 @@ const markerGeo = new THREE.SphereGeometry(0.38, 18, 14);
       }
     });
 
-    /* пена на берегах и всех видимых мешах карты (Landscape и т.п.) */
     applyFoamToObject(model);
 
     if (bounds){
@@ -962,6 +964,7 @@ function resize(){
   camera.updateProjectionMatrix();
   seaUniforms.uRes.value.set(canvas.width, canvas.height);
   composer.setSize(w,h);
+  updateFXAAResolution();
 }
 addEventListener('resize', resize);
 resize();
@@ -1085,7 +1088,7 @@ function frame(now){
   foamUniforms.uTimeF.value = time;
   foamUniforms.uSeaLevelF.value = seaLevel;
 
-  /* --- рендер через composer (bloom) --- */
+  /* --- рендер через composer (bloom + fxaa) --- */
   composer.render();
   spdEl.textContent = (spd*3.5).toFixed(1);
   requestAnimationFrame(frame);
