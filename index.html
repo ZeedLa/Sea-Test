@@ -12,7 +12,7 @@ html, body { margin:0; height:100%; overflow:hidden; background:#04121e;
 .hud { position:fixed; left:14px; top:12px; padding:12px 14px;
   background:rgba(4,18,30,.45); border:1px solid rgba(140,190,230,.25);
   border-radius:12px; backdrop-filter:blur(6px); font-size:13px; line-height:1.5;
-  max-width:300px; user-select:none; pointer-events:none; }
+  max-width:310px; user-select:none; pointer-events:none; }
 .hud b { color:#8fd0ff; }
 .key { display:inline-block; min-width:16px; padding:1px 6px; margin:0 1px;
   border-radius:5px; background:rgba(140,190,230,.18);
@@ -51,7 +51,8 @@ html, body { margin:0; height:100%; overflow:hidden; background:#04121e;
   <span class="key">V</span> камера: изометрия / за лодкой<br />
   <span class="key">C</span> отладка: коллизии и зоны<br />
   <span class="key">X</span> вкл/выкл коллизии<br />
-  Подплывайте к <b>оранжевым буям</b> — откроется информация о точке.
+  Подплывайте к <b>оранжевым буям</b> — откроется информация о точке.<br />
+  <span style="opacity:.75">Если упрётесь в невидимую стену — зелёная рамка покажет границу зоны <b>water</b>.</span>
   <div id="model" style="margin-top:6px;opacity:.75"></div>
 </div>
 
@@ -261,7 +262,7 @@ import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
 /* ============================ НАСТРОЙКИ ============================ */
 const GLB_URL    = 'yacht.glb';
-const BIGMAP_URL = 'Bigmap.glb';
+const BIGMAP_URL = 'bigmap.glb';
 const QUALITY    = 0.9;
 
 /* размер лодки: самая длинная ось yacht.glb приводится к этому значению */
@@ -270,11 +271,16 @@ const PROCEDURAL_BOAT_SCALE = 1.0;
 const GLB_YAW_OFFSET = 0.0;
 
 /* высота посадки лодки */
-const BOAT_WATER_OFFSET = 6.35;
+const BOAT_WATER_OFFSET = 0.35;
 const GLB_SINK = 0.10;
 
-/* радиус лодки для коллизий (растёт вместе с GLB_TARGET_LENGTH) */
+/* радиус лодки для коллизий */
 const BOAT_RADIUS = 0.9 * (GLB_TARGET_LENGTH / 12.6);
+
+/* ГЛАВНЫЙ ПЕРЕКЛЮЧАТЕЛЬ ЭТОЙ ПРАВКИ:
+   true  — лодка не может выплыть за прямоугольник плоскости "water";
+   false — ограничения нет, плавать можно всюду (работают только заборы Col). */
+const USE_WATER_BOUNDS = true;
 
 const POI_RADIUS = 7.0;
 
@@ -307,6 +313,8 @@ const camera = new THREE.PerspectiveCamera(CAM_PRESETS.iso.fov, innerWidth/inner
 /* ============================ состояние карты ============================ */
 let seaLevel = 0;
 let bounds = null;
+let boundsLine = null;          // зелёная рамка зоны water
+let boundsFlashUntil = -1;      // вспышка рамки при ударе о границу
 const spawn = { x:0, z:0, heading:0 };
 const colliders = [];
 const pois = [];
@@ -535,10 +543,11 @@ const markerGeo = new THREE.SphereGeometry(0.38, 18, 14);
         if (w < 4 || d < 4)
           console.warn(`[map] ВНИМАНИЕ: зона "water" слишком мала/повёрнута (${w.toFixed(2)} x ${d.toFixed(2)}).`);
         else
-          console.log(`[map] water: уровень ${seaLevel.toFixed(2)}, зона ${w.toFixed(1)} x ${d.toFixed(1)}`);
+          console.log(`[map] water: уровень ${seaLevel.toFixed(2)}, зона ${w.toFixed(1)} x ${d.toFixed(1)}` +
+                      (USE_WATER_BOUNDS ? ' — лодка ограничена этой зоной' : ' — ограничение зоны ВЫКЛЮЧЕНО'));
       }
 
-      /* --- ColN: ТОЛЬКО эти объекты дают коллизии. Landscape НЕ участвует. --- */
+      /* --- ColN: ТОЛЬКО эти объекты дают коллизии --- */
       else if (/^col\d+$/.test(lower)){
         o.visible = false;
         const box = computeLocalBox(o);
@@ -589,7 +598,8 @@ const markerGeo = new THREE.SphereGeometry(0.38, 18, 14);
       /* Landscape и всё остальное — просто рендерится, без коллизий */
     });
 
-    /* отладочная рамка зоны воды */
+    /* зелёная рамка зоны water — живёт отдельно от debugGroup,
+       чтобы вспыхивать при ударе о границу даже без нажатого C */
     if (bounds){
       const y = seaLevel + 0.15;
       const p = [
@@ -598,9 +608,11 @@ const markerGeo = new THREE.SphereGeometry(0.38, 18, 14);
         new THREE.Vector3(bounds.maxX, y, bounds.maxZ),
         new THREE.Vector3(bounds.minX, y, bounds.maxZ),
       ];
-      debugGroup.add(new THREE.Line(
+      boundsLine = new THREE.Line(
         new THREE.BufferGeometry().setFromPoints([p[0],p[1],p[2],p[3],p[0]]),
-        new THREE.LineBasicMaterial({ color:0x44ff88 })));
+        new THREE.LineBasicMaterial({ color:0x44ff88 }));
+      boundsLine.visible = false;
+      scene.add(boundsLine);
     }
     /* отладочные круги радиуса POI */
     for (const pt of pois){
@@ -706,17 +718,19 @@ let camInit = false;
 const damp = (cur,target,dt,tau) => cur + (target-cur)*(1-Math.exp(-dt/tau));
 
 /* ============================ границы и коллизии ============================ */
+/* Единственный источник «невидимых стен» помимо ColN — прямоугольник water. */
 function clampToWater(){
-  if (!bounds) return;
+  if (!bounds || !USE_WATER_BOUNDS) return;
   const M = BOAT_RADIUS + 0.4;
   if (bounds.maxX - bounds.minX < M*3 || bounds.maxZ - bounds.minZ < M*3) return;
-  B.x = THREE.MathUtils.clamp(B.x, bounds.minX + M, bounds.maxX - M);
-  B.z = THREE.MathUtils.clamp(B.z, bounds.minZ + M, bounds.maxZ - M);
+  const nx = THREE.MathUtils.clamp(B.x, bounds.minX + M, bounds.maxX - M);
+  const nz = THREE.MathUtils.clamp(B.z, bounds.minZ + M, bounds.maxZ - M);
+  if (nx !== B.x || nz !== B.z){
+    B.x = nx; B.z = nz;
+    boundsFlashUntil = gTime + 1.5;  // показать, в какую стену упёрлись
+  }
 }
 
-/* Выталкивает лодку из одного коллайдера. Возвращает расстояние, на которое
-   лодку пришлось переместить (в мировых координатах). Скорость НЕ гасится —
-   лодка всегда остаётся управляемой и скользит вдоль заборов. */
 const _lp = new THREE.Vector3();
 const _before = new THREE.Vector2();
 function pushOutOfCollider(c){
@@ -739,7 +753,6 @@ function pushOutOfCollider(c){
 
 function resolveCollisions(silent = false){
   if (!collisionsEnabled) return;
-  /* несколько проходов — на случай, если лодка зажата между двумя заборами */
   for (let iter = 0; iter < 4; iter++){
     let any = false;
     for (const c of colliders){
@@ -747,14 +760,11 @@ function resolveCollisions(silent = false){
       const push = pushOutOfCollider(c);
       if (push > 0){
         any = true;
-        if (!silent && push > 0.5) c.deep = true; // лодку грубо «телепортирует»
+        if (!silent && push > 0.5) c.deep = true;
       }
     }
     if (!any) break;
   }
-  /* Защита от «замурования»: если коллайдер ~1 секунду подряд удерживает
-     лодку внутри себя (сплошной бокс, спавн внутри и т.п.) — отключаем его
-     и сообщаем имя объекта в консоли. */
   for (const c of colliders){
     if (!c.enabled) continue;
     if (c.deep){
@@ -762,7 +772,7 @@ function resolveCollisions(silent = false){
       if (c.deepFrames > 60){
         c.enabled = false;
         if (c.debugMat) c.debugMat.color.set(0x888888);
-        console.warn(`[map] Коллизия "${c.name}" постоянно держит лодку внутри — ОН ОТКЛЮЧЁН. Проверьте этот объект в Blender: вероятно, это сплошной куб, а не стенка.`);
+        console.warn(`[map] Коллизия "${c.name}" постоянно держит лодку внутри — ОН ОТКЛЮЧЁН. Проверьте этот объект в Blender.`);
       }
     } else {
       c.deepFrames = 0;
@@ -831,6 +841,9 @@ function frame(now){
   /* --- ограничения карты --- */
   clampToWater();
   resolveCollisions();
+
+  /* --- видимость рамки зоны: видна при нажатом C или вспыхивает при ударе --- */
+  if (boundsLine) boundsLine.visible = debugGroup.visible || gTime < boundsFlashUntil;
 
   /* --- качка на волнах --- */
   const e = 1;
