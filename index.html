@@ -25,7 +25,6 @@ html, body { margin:0; height:100%; overflow:hidden; background:#04121e;
 
 #tag { position:fixed; left:14px; bottom:12px; font-size:11px; opacity:.6; user-select:none; }
 
-/* ---- карточка точки интереса ---- */
 #poi { position:fixed; right:18px; top:50%; width:320px; max-width:80vw;
   transform:translateY(-50%) translateX(130%); opacity:0;
   transition:transform .45s cubic-bezier(.2,.9,.25,1), opacity .45s;
@@ -265,25 +264,20 @@ const GLB_URL    = 'yacht.glb';
 const BIGMAP_URL = 'Bigmap.glb';
 const QUALITY    = 0.9;
 
-/* ---- ВОПРОС 4: РАЗМЕР ЛОДКИ ----
-   GLB_TARGET_LENGTH — модель yacht.glb масштабируется так, что её самая
-   длинная ось становится равной этому значению. Хотите крупнее — увеличьте. */
+/* размер лодки: самая длинная ось yacht.glb приводится к этому значению */
 const GLB_TARGET_LENGTH = 12.6;
-const PROCEDURAL_BOAT_SCALE = 1.0;   // размер запасной (процедурной) лодки
-const GLB_YAW_OFFSET = 0.0;          // Math.PI, если модель смотрит в -Z
+const PROCEDURAL_BOAT_SCALE = 1.0;
+const GLB_YAW_OFFSET = 0.0;
 
-/* ---- ВОПРОС 2: ВЫСОТА ПОСАДКИ ЛОДКИ ----
-   BOAT_WATER_OFFSET — главный регулятор: поднимает ВСЮ лодку над волной.
-   GLB_SINK — насколько низ корпуса утоплен в воду (минус = выше над водой). */
-const BOAT_WATER_OFFSET = 0.95;
+/* высота посадки лодки */
+const BOAT_WATER_OFFSET = 0.35;
 const GLB_SINK = 0.10;
 
-/* Радиус лодки для коллизий — растёт автоматически вместе с GLB_TARGET_LENGTH */
-const BOAT_RADIUS = 1.1 * (GLB_TARGET_LENGTH / 12.6);
+/* радиус лодки для коллизий (растёт вместе с GLB_TARGET_LENGTH) */
+const BOAT_RADIUS = 0.9 * (GLB_TARGET_LENGTH / 12.6);
 
-const POI_RADIUS = 7.0;              // радиус срабатывания точек интереса
+const POI_RADIUS = 7.0;
 
-/* Описания точек (ключ = имя объекта в glb строчными буквами) */
 const POI_DATA = {
   point1: { title:'Старый маяк',    text:'Описание точки 1. Замените текст и фото в POI_DATA.', img:'photos/point1.jpg' },
   point2: { title:'Рыбацкая бухта', text:'Описание точки 2. Замените текст и фото в POI_DATA.', img:'photos/point2.jpg' },
@@ -293,9 +287,7 @@ const POI_DATA = {
   point6: { title:'Скалы',          text:'Описание точки 6. Замените текст и фото в POI_DATA.', img:'photos/point6.jpg' },
 };
 
-/* ---- ВОПРОС 3: КАМЕРА ----
-   iso  — 3/4 сверху: большой наклон, узкий FOV, камера не крутится за лодкой
-   chase— классический вид сзади. Переключение — клавиша V. */
+/* камера: iso — 3/4 сверху, chase — за лодкой; клавиша V */
 const CAM_PRESETS = {
   iso:   { pitch: 0.98, dist: 20, fov: 38, followHeading: false },
   chase: { pitch: 0.34, dist: 10, fov: 55, followHeading: true  },
@@ -322,7 +314,6 @@ let activePoi = null;
 let collisionsEnabled = true;
 let gTime = 0;
 
-/* отладочная группа (клавиша C) */
 const debugGroup = new THREE.Group();
 debugGroup.visible = false;
 scene.add(debugGroup);
@@ -374,7 +365,6 @@ seaMesh.frustumCulled = false;
 seaMesh.renderOrder = -1;
 scene.add(seaMesh);
 
-/* JS-копия шейдерной высоты волны (+ уровень карты) */
 const fract = x => x - Math.floor(x);
 function hashJS(x, y){ return fract(Math.sin(x*127.1 + y*311.7) * 43758.5453123); }
 function noiseJS(x, y){
@@ -467,7 +457,7 @@ updateInfo();
     wrap.scale.setScalar(GLB_TARGET_LENGTH / maxAxis);
     wrap.rotation.y = GLB_YAW_OFFSET;
     const box2 = new THREE.Box3().setFromObject(wrap);
-    wrap.position.y -= box2.min.y + GLB_SINK;   // GLB_SINK: минус — поднять лодку
+    wrap.position.y -= box2.min.y + GLB_SINK;
     scene.remove(boat);
     boat = wrap;
     scene.add(boat);
@@ -496,10 +486,8 @@ function computeLocalBox(root){
 function addDebugBox(c){
   const size = new THREE.Vector3(), center = new THREE.Vector3();
   c.box.getSize(size); c.box.getCenter(center);
-  const mesh = new THREE.Mesh(
-    new THREE.BoxGeometry(1,1,1),
-    new THREE.MeshBasicMaterial({ wireframe:true, color:0xff5566 })
-  );
+  const mat = new THREE.MeshBasicMaterial({ wireframe:true, color:0xff5566 });
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(1,1,1), mat);
   mesh.position.copy(center);
   mesh.scale.copy(size.max(new THREE.Vector3(0.02,0.02,0.02)));
   const holder = new THREE.Group();
@@ -507,6 +495,7 @@ function addDebugBox(c){
   holder.matrixAutoUpdate = false;
   holder.matrix.copy(c.mat);
   debugGroup.add(holder);
+  c.debugMat = mat;
 }
 
 function placeholderImg(label){
@@ -544,12 +533,12 @@ const markerGeo = new THREE.SphereGeometry(0.38, 18, 14);
         o.visible = false;
         const w = b.max.x-b.min.x, d = b.max.z-b.min.z;
         if (w < 4 || d < 4)
-          console.warn(`[map] ВНИМАНИЕ: зона "water" слишком мала/повёрнута (${w.toFixed(2)} x ${d.toFixed(2)}). Проверьте плоскость в Blender.`);
+          console.warn(`[map] ВНИМАНИЕ: зона "water" слишком мала/повёрнута (${w.toFixed(2)} x ${d.toFixed(2)}).`);
         else
           console.log(`[map] water: уровень ${seaLevel.toFixed(2)}, зона ${w.toFixed(1)} x ${d.toFixed(1)}`);
       }
 
-      /* --- ColN: заборы коллизий --- */
+      /* --- ColN: ТОЛЬКО эти объекты дают коллизии. Landscape НЕ участвует. --- */
       else if (/^col\d+$/.test(lower)){
         o.visible = false;
         const box = computeLocalBox(o);
@@ -560,15 +549,20 @@ const markerGeo = new THREE.SphereGeometry(0.38, 18, 14);
         const sx = new THREE.Vector3().setFromMatrixColumn(o.matrixWorld,0).length();
         const sz = new THREE.Vector3().setFromMatrixColumn(o.matrixWorld,2).length();
         const c = {
+          name,
           box,
           mat: o.matrixWorld.clone(),
           inv: new THREE.Matrix4().copy(o.matrixWorld).invert(),
           rLocal: BOAT_RADIUS / Math.max(1e-4, (sx+sz)*0.5),
+          enabled: true,
+          deep: false,
+          deepFrames: 0,
+          debugMat: null,
         };
         colliders.push(c);
         addDebugBox(c);
         const wSize = new THREE.Box3().copy(box).applyMatrix4(c.mat).getSize(new THREE.Vector3());
-        console.log(`[map] ${name}: мир.размер ${wSize.x.toFixed(1)} x ${wSize.y.toFixed(1)} x ${wSize.z.toFixed(1)}`);
+        console.log(`[map] коллизия ${name}: мир.размер ${wSize.x.toFixed(1)} x ${wSize.y.toFixed(1)} x ${wSize.z.toFixed(1)}`);
       }
 
       /* --- Start --- */
@@ -592,7 +586,7 @@ const markerGeo = new THREE.SphereGeometry(0.38, 18, 14);
         scene.add(marker);
         pois.push({ key:lower, x:_v.x, z:_v.z, marker, phase:Math.random()*6.283, data });
       }
-      /* Landscape остаётся видимым */
+      /* Landscape и всё остальное — просто рендерится, без коллизий */
     });
 
     /* отладочная рамка зоны воды */
@@ -620,12 +614,15 @@ const markerGeo = new THREE.SphereGeometry(0.38, 18, 14);
         new THREE.LineBasicMaterial({ color:0xffaa33 })));
     }
 
-    /* если лодка случайно оказалась внутри забора — вытолкнуть её */
+    /* если лодка оказалась внутри забора — аккуратно вытолкнуть */
     for (let i=0;i<3;i++) resolveCollisions(true);
 
+    if (bounds && (spawn.x < bounds.minX || spawn.x > bounds.maxX ||
+                   spawn.z < bounds.minZ || spawn.z > bounds.maxZ))
+      console.warn('[map] Внимание: Start находится ВНЕ плоскости water.');
+
+    console.log(`[map] Итог: коллизий = ${colliders.length} (только объекты ColN), точек = ${pois.length}. Landscape коллизий не имеет.`);
     infoMap = 'bigmap.glb ✓'; updateInfo();
-    console.log('[map] bigmap.glb: коллизий =', colliders.length, ', точек =', pois.length,
-      '. Нажмите C для отладочной визуализации.');
   }, undefined, err => {
     console.warn('[map] bigmap.glb не найден.', err);
     infoMap = 'не найдена ✗'; updateInfo();
@@ -680,13 +677,12 @@ addEventListener('keydown', e => {
     camMode = (camMode === 'iso') ? 'chase' : 'iso';
     camPitch = CAM_PRESETS[camMode].pitch;
     camDist  = CAM_PRESETS[camMode].dist;
-    console.log('[camera] режим:', camMode);
   }
 });
 addEventListener('keyup', e => keys[e.code] = false);
 
 let dragging=false, lastX=0, lastY=0;
-let camYaw = Math.PI*0.25;                 // базовый угол (для iso — диагональ)
+let camYaw = Math.PI*0.25;
 let camPitch = CAM_PRESETS.iso.pitch;
 let camDist  = CAM_PRESETS.iso.dist;
 canvas.addEventListener('mousedown', e => { dragging=true; lastX=e.clientX; lastY=e.clientY; });
@@ -713,33 +709,65 @@ const damp = (cur,target,dt,tau) => cur + (target-cur)*(1-Math.exp(-dt/tau));
 function clampToWater(){
   if (!bounds) return;
   const M = BOAT_RADIUS + 0.4;
-  /* защита от вырожденной зоны (например, вертикально стоящий Plane) */
   if (bounds.maxX - bounds.minX < M*3 || bounds.maxZ - bounds.minZ < M*3) return;
-  const nx = THREE.MathUtils.clamp(B.x, bounds.minX + M, bounds.maxX - M);
-  const nz = THREE.MathUtils.clamp(B.z, bounds.minZ + M, bounds.maxZ - M);
-  if (nx !== B.x || nz !== B.z){ B.x = nx; B.z = nz; B.speed *= 0.95; }
+  B.x = THREE.MathUtils.clamp(B.x, bounds.minX + M, bounds.maxX - M);
+  B.z = THREE.MathUtils.clamp(B.z, bounds.minZ + M, bounds.maxZ - M);
 }
 
+/* Выталкивает лодку из одного коллайдера. Возвращает расстояние, на которое
+   лодку пришлось переместить (в мировых координатах). Скорость НЕ гасится —
+   лодка всегда остаётся управляемой и скользит вдоль заборов. */
 const _lp = new THREE.Vector3();
+const _before = new THREE.Vector2();
+function pushOutOfCollider(c){
+  _lp.set(B.x, B.renderY, B.z).applyMatrix4(c.inv);
+  const b = c.box, r = c.rLocal;
+  if (!(_lp.x > b.min.x - r && _lp.x < b.max.x + r &&
+        _lp.z > b.min.z - r && _lp.z < b.max.z + r)) return 0;
+  const dx1 = _lp.x - (b.min.x - r), dx2 = (b.max.x + r) - _lp.x;
+  const dz1 = _lp.z - (b.min.z - r), dz2 = (b.max.z + r) - _lp.z;
+  const m = Math.min(dx1,dx2,dz1,dz2);
+  if      (m === dx1) _lp.x = b.min.x - r;
+  else if (m === dx2) _lp.x = b.max.x + r;
+  else if (m === dz1) _lp.z = b.min.z - r;
+  else                _lp.z = b.max.z + r;
+  _before.set(B.x, B.z);
+  _lp.applyMatrix4(c.mat);
+  B.x = _lp.x; B.z = _lp.z;
+  return Math.hypot(B.x - _before.x, B.z - _before.z);
+}
+
 function resolveCollisions(silent = false){
   if (!collisionsEnabled) return;
-  for (const c of colliders){
-    _lp.set(B.x, B.renderY, B.z).applyMatrix4(c.inv);
-    const b = c.box, r = c.rLocal;
-    if (_lp.x > b.min.x - r && _lp.x < b.max.x + r &&
-        _lp.z > b.min.z - r && _lp.z < b.max.z + r){
-      const dx1 = _lp.x - (b.min.x - r), dx2 = (b.max.x + r) - _lp.x;
-      const dz1 = _lp.z - (b.min.z - r), dz2 = (b.max.z + r) - _lp.z;
-      const m = Math.min(dx1,dx2,dz1,dz2);
-      if      (m === dx1) _lp.x = b.min.x - r;
-      else if (m === dx2) _lp.x = b.max.x + r;
-      else if (m === dz1) _lp.z = b.min.z - r;
-      else                _lp.z = b.max.z + r;
-      _lp.applyMatrix4(c.mat);
-      B.x = _lp.x; B.z = _lp.z;
-      /* гасим скорость только при ощутимом ударе — скольжение вдоль забора не стопорит */
-      if (!silent && m > 0.05) B.speed *= 0.6;
+  /* несколько проходов — на случай, если лодка зажата между двумя заборами */
+  for (let iter = 0; iter < 4; iter++){
+    let any = false;
+    for (const c of colliders){
+      if (!c.enabled) continue;
+      const push = pushOutOfCollider(c);
+      if (push > 0){
+        any = true;
+        if (!silent && push > 0.5) c.deep = true; // лодку грубо «телепортирует»
+      }
     }
+    if (!any) break;
+  }
+  /* Защита от «замурования»: если коллайдер ~1 секунду подряд удерживает
+     лодку внутри себя (сплошной бокс, спавн внутри и т.п.) — отключаем его
+     и сообщаем имя объекта в консоли. */
+  for (const c of colliders){
+    if (!c.enabled) continue;
+    if (c.deep){
+      c.deepFrames++;
+      if (c.deepFrames > 60){
+        c.enabled = false;
+        if (c.debugMat) c.debugMat.color.set(0x888888);
+        console.warn(`[map] Коллизия "${c.name}" постоянно держит лодку внутри — ОН ОТКЛЮЧЁН. Проверьте этот объект в Blender: вероятно, это сплошной куб, а не стенка.`);
+      }
+    } else {
+      c.deepFrames = 0;
+    }
+    c.deep = false;
   }
 }
 
