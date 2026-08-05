@@ -12,7 +12,7 @@ html, body { margin:0; height:100%; overflow:hidden; background:#04121e;
 .hud { position:fixed; left:14px; top:12px; padding:12px 14px;
   background:rgba(4,18,30,.45); border:1px solid rgba(140,190,230,.25);
   border-radius:12px; backdrop-filter:blur(6px); font-size:13px; line-height:1.5;
-  max-width:290px; user-select:none; pointer-events:none; }
+  max-width:300px; user-select:none; pointer-events:none; }
 .hud b { color:#8fd0ff; }
 .key { display:inline-block; min-width:16px; padding:1px 6px; margin:0 1px;
   border-radius:5px; background:rgba(140,190,230,.18);
@@ -48,13 +48,16 @@ html, body { margin:0; height:100%; overflow:hidden; background:#04121e;
   <span class="key">A</span>/<span class="key">←</span> влево &nbsp;
   <span class="key">D</span>/<span class="key">→</span> вправо<br />
   <span class="key">drag</span> камера &nbsp; <span class="key">wheel</span> зум &nbsp;
-  <span class="key">R</span> возврат на старт<br />
+  <span class="key">R</span> на старт<br />
+  <span class="key">V</span> камера: изометрия / за лодкой<br />
+  <span class="key">C</span> отладка: коллизии и зоны<br />
+  <span class="key">X</span> вкл/выкл коллизии<br />
   Подплывайте к <b>оранжевым буям</b> — откроется информация о точке.
   <div id="model" style="margin-top:6px;opacity:.75"></div>
 </div>
 
 <div id="speed">скорость&nbsp; <b id="spd">0.0</b> kn</div>
-<div id="tag">Положите рядом <b>bigmap.glb</b> (карта) и, при желании, <b>yacht.glb</b> (лодка).</div>
+<div id="tag">Рядом должны лежать <b>bigmap.glb</b> и (опционально) <b>yacht.glb</b>.</div>
 
 <div id="poi">
   <img id="poi-img" alt="" />
@@ -62,7 +65,7 @@ html, body { margin:0; height:100%; overflow:hidden; background:#04121e;
   <div id="poi-text"></div>
 </div>
 
-<!-- ============ SEA (raymarch) — RawShaderMaterial, GLSL3, пишет gl_FragDepth ============ -->
+<!-- ============ SEA (raymarch) ============ -->
 <script id="sea-vert" type="x-shader/x-vertex">
 in vec3 position;
 void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }
@@ -75,7 +78,7 @@ uniform float iTime;
 uniform vec3 uCamPos;
 uniform mat4 uInvProjView;
 uniform mat4 uProjView;
-uniform float uSeaLevel;               // <-- уровень воды (высота Plane "water")
+uniform float uSeaLevel;
 
 /* ===== Seascape by Alexander Alekseev aka TDM (2014), CC BY-NC-SA 3.0 ===== */
 const int NUM_STEPS = 32;
@@ -126,7 +129,7 @@ float map(vec3 p) {
     h += d * amp;
     uv *= octave_m; freq *= 1.9; amp *= 0.22; choppy = mix(choppy, 1.0, 0.2);
   }
-  return p.y - uSeaLevel - h;          // волны вокруг уровня uSeaLevel
+  return p.y - uSeaLevel - h;
 }
 float map_detailed(vec3 p) {
   float freq = SEA_FREQ, amp = SEA_HEIGHT, choppy = SEA_CHOPPY;
@@ -257,29 +260,49 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
-/* ------------------------------ настройки ------------------------------ */
-const GLB_URL        = 'yacht.glb';   // модель лодки (иначе — процедурная)
-const BIGMAP_URL     = 'Bigmap.glb';  // карта: water, Landscape, ColN, Start, PointN
+/* ============================ НАСТРОЙКИ ============================ */
+const GLB_URL    = 'yacht.glb';
+const BIGMAP_URL = 'bigmap.glb';
+const QUALITY    = 0.9;
+
+/* ---- ВОПРОС 4: РАЗМЕР ЛОДКИ ----
+   GLB_TARGET_LENGTH — модель yacht.glb масштабируется так, что её самая
+   длинная ось становится равной этому значению. Хотите крупнее — увеличьте. */
 const GLB_TARGET_LENGTH = 12.6;
-const GLB_YAW_OFFSET = 0.0;
-const QUALITY        = 0.9;
+const PROCEDURAL_BOAT_SCALE = 1.0;   // размер запасной (процедурной) лодки
+const GLB_YAW_OFFSET = 0.0;          // Math.PI, если модель смотрит в -Z
 
-const BOAT_RADIUS    = 1.1;           // "габарит" лодки для коллизий (в метрах сцены)
-const BOAT_WATER_OFFSET = 0.05;       // насколько приподнять лодку над волной
-const POI_RADIUS     = 7.0;           // радиус срабатывания точки интереса
+/* ---- ВОПРОС 2: ВЫСОТА ПОСАДКИ ЛОДКИ ----
+   BOAT_WATER_OFFSET — главный регулятор: поднимает ВСЮ лодку над волной.
+   GLB_SINK — насколько низ корпуса утоплен в воду (минус = выше над водой). */
+const BOAT_WATER_OFFSET = 0.35;
+const GLB_SINK = 0.10;
 
-/* Описания точек. Ключ — имя объекта в glb строчными буквами.
-   Замените img/title/text на свои. */
+/* Радиус лодки для коллизий — растёт автоматически вместе с GLB_TARGET_LENGTH */
+const BOAT_RADIUS = 1.1 * (GLB_TARGET_LENGTH / 12.6);
+
+const POI_RADIUS = 7.0;              // радиус срабатывания точек интереса
+
+/* Описания точек (ключ = имя объекта в glb строчными буквами) */
 const POI_DATA = {
-  point1: { title:'Старый маяк',   text:'Описание точки 1. Замените текст и фото в объекте POI_DATA.', img:'photos/point1.jpg' },
-  point2: { title:'Рыбацкая бухта',text:'Описание точки 2. Замените текст и фото в объекте POI_DATA.', img:'photos/point2.jpg' },
-  point3: { title:'Крепость',      text:'Описание точки 3. Замените текст и фото в объекте POI_DATA.', img:'photos/point3.jpg' },
-  point4: { title:'Причал',        text:'Описание точки 4. Замените текст и фото в объекте POI_DATA.', img:'photos/point4.jpg' },
-  point5: { title:'Лагуна',        text:'Описание точки 5. Замените текст и фото в объекте POI_DATA.', img:'photos/point5.jpg' },
-  point6: { title:'Скалы',         text:'Описание точки 6. Замените текст и фото в объекте POI_DATA.', img:'photos/point6.jpg' },
+  point1: { title:'Старый маяк',    text:'Описание точки 1. Замените текст и фото в POI_DATA.', img:'photos/point1.jpg' },
+  point2: { title:'Рыбацкая бухта', text:'Описание точки 2. Замените текст и фото в POI_DATA.', img:'photos/point2.jpg' },
+  point3: { title:'Крепость',       text:'Описание точки 3. Замените текст и фото в POI_DATA.', img:'photos/point3.jpg' },
+  point4: { title:'Причал',         text:'Описание точки 4. Замените текст и фото в POI_DATA.', img:'photos/point4.jpg' },
+  point5: { title:'Лагуна',         text:'Описание точки 5. Замените текст и фото в POI_DATA.', img:'photos/point5.jpg' },
+  point6: { title:'Скалы',          text:'Описание точки 6. Замените текст и фото в POI_DATA.', img:'photos/point6.jpg' },
 };
 
-/* ------------------------------ рендерер ------------------------------ */
+/* ---- ВОПРОС 3: КАМЕРА ----
+   iso  — 3/4 сверху: большой наклон, узкий FOV, камера не крутится за лодкой
+   chase— классический вид сзади. Переключение — клавиша V. */
+const CAM_PRESETS = {
+  iso:   { pitch: 0.98, dist: 20, fov: 38, followHeading: false },
+  chase: { pitch: 0.34, dist: 10, fov: 55, followHeading: true  },
+};
+let camMode = 'iso';
+
+/* ============================ рендерер ============================ */
 const canvas = document.getElementById('gl');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) * QUALITY);
@@ -287,18 +310,24 @@ renderer.autoClear = false;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 3000);
+const camera = new THREE.PerspectiveCamera(CAM_PRESETS.iso.fov, innerWidth/innerHeight, 0.1, 3000);
 
-/* ------------------------------ состояние карты ------------------------------ */
-let seaLevel = 0;                 // высота воды (из Plane "water")
-let bounds = null;                // {minX,maxX,minZ,maxZ} — зона плавания
+/* ============================ состояние карты ============================ */
+let seaLevel = 0;
+let bounds = null;
 const spawn = { x:0, z:0, heading:0 };
-const colliders = [];             // {box, mat, inv, rLocal}
-const pois = [];                  // {name,x,z,marker,phase,data}
+const colliders = [];
+const pois = [];
 let activePoi = null;
+let collisionsEnabled = true;
 let gTime = 0;
 
-/* ------------------------------ окружение / свет ------------------------------ */
+/* отладочная группа (клавиша C) */
+const debugGroup = new THREE.Group();
+debugGroup.visible = false;
+scene.add(debugGroup);
+
+/* ============================ окружение ============================ */
 function applyEnvMapToBoat() {
   if (!scene.environment || !boat) return;
   boat.traverse(child => {
@@ -311,8 +340,7 @@ function applyEnvMapToBoat() {
     }
   });
 }
-const rgbeLoader = new RGBELoader();
-rgbeLoader.load('sunset.hdr', tex => {
+new RGBELoader().load('sunset.hdr', tex => {
   tex.mapping = THREE.EquirectangularReflectionMapping;
   scene.environment = tex;
   applyEnvMapToBoat();
@@ -325,7 +353,7 @@ scene.add(sun);
 scene.add(new THREE.HemisphereLight(0xbfe0ff, 0x21506b, 0.9));
 scene.add(new THREE.AmbientLight(0x35506a, 0.5));
 
-/* ------------------------------ море ------------------------------ */
+/* ============================ море ============================ */
 const seaUniforms = {
   uRes:        { value: new THREE.Vector2() },
   iTime:       { value: 0 },
@@ -346,7 +374,7 @@ seaMesh.frustumCulled = false;
 seaMesh.renderOrder = -1;
 scene.add(seaMesh);
 
-/* -------- JS-копия шейдерной функции высоты волны (+ seaLevel) -------- */
+/* JS-копия шейдерной высоты волны (+ уровень карты) */
 const fract = x => x - Math.floor(x);
 function hashJS(x, y){ return fract(Math.sin(x*127.1 + y*311.7) * 43758.5453123); }
 function noiseJS(x, y){
@@ -373,10 +401,10 @@ function seaHeightJS(x, z, time){
     const nx=1.6*ux+1.2*uz, nz=-1.2*ux+1.6*uz;
     ux=nx; uz=nz; freq*=1.9; amp*=0.22; choppy += (1-choppy)*0.2;
   }
-  return seaLevel + h;   // абсолютная высота с учётом уровня карты
+  return seaLevel + h;
 }
 
-/* ------------------------------ лодка: процедурная запасная ------------------------------ */
+/* ============================ процедурная лодка (запасная) ============================ */
 function buildProceduralBoat(){
   const g = new THREE.Group();
   const white  = new THREE.MeshStandardMaterial({ color:0xeef2f6, roughness:.5, metalness:.05 });
@@ -417,6 +445,7 @@ function buildProceduralBoat(){
   return g;
 }
 let boat = buildProceduralBoat();
+boat.scale.setScalar(PROCEDURAL_BOAT_SCALE);
 scene.add(boat);
 
 const modelInfo = document.getElementById('model');
@@ -424,7 +453,7 @@ let infoBoat = 'процедурная', infoMap = 'нет';
 const updateInfo = () => modelInfo.innerHTML = `лодка: <b>${infoBoat}</b> · карта: <b>${infoMap}</b>`;
 updateInfo();
 
-/* ------------------------------ загрузка yacht.glb ------------------------------ */
+/* ============================ загрузка yacht.glb ============================ */
 (function tryLoadGLB(){
   new GLTFLoader().load(GLB_URL, gltf => {
     const model = gltf.scene;
@@ -438,7 +467,7 @@ updateInfo();
     wrap.scale.setScalar(GLB_TARGET_LENGTH / maxAxis);
     wrap.rotation.y = GLB_YAW_OFFSET;
     const box2 = new THREE.Box3().setFromObject(wrap);
-    wrap.position.y -= box2.min.y + 0.12;
+    wrap.position.y -= box2.min.y + GLB_SINK;   // GLB_SINK: минус — поднять лодку
     scene.remove(boat);
     boat = wrap;
     scene.add(boat);
@@ -447,9 +476,8 @@ updateInfo();
   }, undefined, () => console.log('[yacht] yacht.glb не найден — процедурная модель.'));
 })();
 
-/* ------------------------------ загрузка bigmap.glb ------------------------------ */
+/* ============================ загрузка bigmap.glb ============================ */
 function computeLocalBox(root){
-  // бокс содержимого root в его собственных локальных координатах
   const box = new THREE.Box3(), tmp = new THREE.Box3(), m = new THREE.Matrix4();
   const rootInv = new THREE.Matrix4().copy(root.matrixWorld).invert();
   root.traverse(o => {
@@ -463,6 +491,22 @@ function computeLocalBox(root){
     }
   });
   return box;
+}
+
+function addDebugBox(c){
+  const size = new THREE.Vector3(), center = new THREE.Vector3();
+  c.box.getSize(size); c.box.getCenter(center);
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(1,1,1),
+    new THREE.MeshBasicMaterial({ wireframe:true, color:0xff5566 })
+  );
+  mesh.position.copy(center);
+  mesh.scale.copy(size.max(new THREE.Vector3(0.02,0.02,0.02)));
+  const holder = new THREE.Group();
+  holder.add(mesh);
+  holder.matrixAutoUpdate = false;
+  holder.matrix.copy(c.mat);
+  debugGroup.add(holder);
 }
 
 function placeholderImg(label){
@@ -497,23 +541,37 @@ const markerGeo = new THREE.SphereGeometry(0.38, 18, 14);
         seaLevel = (b.min.y + b.max.y) / 2;
         seaUniforms.uSeaLevel.value = seaLevel;
         bounds = { minX:b.min.x, maxX:b.max.x, minZ:b.min.z, maxZ:b.max.z };
-        o.visible = false;   // рисуем свою raymarch-воду на этой высоте
+        o.visible = false;
+        const w = b.max.x-b.min.x, d = b.max.z-b.min.z;
+        if (w < 4 || d < 4)
+          console.warn(`[map] ВНИМАНИЕ: зона "water" слишком мала/повёрнута (${w.toFixed(2)} x ${d.toFixed(2)}). Проверьте плоскость в Blender.`);
+        else
+          console.log(`[map] water: уровень ${seaLevel.toFixed(2)}, зона ${w.toFixed(1)} x ${d.toFixed(1)}`);
       }
 
       /* --- ColN: заборы коллизий --- */
       else if (/^col\d+$/.test(lower)){
         o.visible = false;
+        const box = computeLocalBox(o);
+        if (box.isEmpty()){
+          console.warn('[map] Col без геометрии, пропущен:', name);
+          return;
+        }
         const sx = new THREE.Vector3().setFromMatrixColumn(o.matrixWorld,0).length();
         const sz = new THREE.Vector3().setFromMatrixColumn(o.matrixWorld,2).length();
-        colliders.push({
-          box: computeLocalBox(o),
+        const c = {
+          box,
           mat: o.matrixWorld.clone(),
           inv: new THREE.Matrix4().copy(o.matrixWorld).invert(),
           rLocal: BOAT_RADIUS / Math.max(1e-4, (sx+sz)*0.5),
-        });
+        };
+        colliders.push(c);
+        addDebugBox(c);
+        const wSize = new THREE.Box3().copy(box).applyMatrix4(c.mat).getSize(new THREE.Vector3());
+        console.log(`[map] ${name}: мир.размер ${wSize.x.toFixed(1)} x ${wSize.y.toFixed(1)} x ${wSize.z.toFixed(1)}`);
       }
 
-      /* --- Start: точка спавна --- */
+      /* --- Start --- */
       else if (lower === 'start'){
         o.visible = false;
         o.getWorldPosition(_v);
@@ -522,7 +580,7 @@ const markerGeo = new THREE.SphereGeometry(0.38, 18, 14);
         respawn();
       }
 
-      /* --- PointN: точки интереса --- */
+      /* --- PointN --- */
       else if (/^point\d+$/.test(lower)){
         o.visible = false;
         o.getWorldPosition(_v);
@@ -534,19 +592,47 @@ const markerGeo = new THREE.SphereGeometry(0.38, 18, 14);
         scene.add(marker);
         pois.push({ key:lower, x:_v.x, z:_v.z, marker, phase:Math.random()*6.283, data });
       }
-      /* Landscape остаётся видимым как есть */
+      /* Landscape остаётся видимым */
     });
 
+    /* отладочная рамка зоны воды */
+    if (bounds){
+      const y = seaLevel + 0.15;
+      const p = [
+        new THREE.Vector3(bounds.minX, y, bounds.minZ),
+        new THREE.Vector3(bounds.maxX, y, bounds.minZ),
+        new THREE.Vector3(bounds.maxX, y, bounds.maxZ),
+        new THREE.Vector3(bounds.minX, y, bounds.maxZ),
+      ];
+      debugGroup.add(new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([p[0],p[1],p[2],p[3],p[0]]),
+        new THREE.LineBasicMaterial({ color:0x44ff88 })));
+    }
+    /* отладочные круги радиуса POI */
+    for (const pt of pois){
+      const cp = [];
+      for (let i=0;i<=48;i++){
+        const a = i/48*Math.PI*2;
+        cp.push(new THREE.Vector3(pt.x + Math.cos(a)*POI_RADIUS, seaLevel + 0.15, pt.z + Math.sin(a)*POI_RADIUS));
+      }
+      debugGroup.add(new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(cp),
+        new THREE.LineBasicMaterial({ color:0xffaa33 })));
+    }
+
+    /* если лодка случайно оказалась внутри забора — вытолкнуть её */
+    for (let i=0;i<3;i++) resolveCollisions(true);
+
     infoMap = 'bigmap.glb ✓'; updateInfo();
-    console.log('[map] bigmap.glb загружен. seaLevel =', seaLevel,
-      '| коллизий:', colliders.length, '| точек:', pois.length);
+    console.log('[map] bigmap.glb: коллизий =', colliders.length, ', точек =', pois.length,
+      '. Нажмите C для отладочной визуализации.');
   }, undefined, err => {
-    console.warn('[map] bigmap.glb не найден — карта не загружена.', err);
+    console.warn('[map] bigmap.glb не найден.', err);
     infoMap = 'не найдена ✗'; updateInfo();
   });
 })();
 
-/* ------------------------------ спавн / сброс ------------------------------ */
+/* ============================ спавн / сброс ============================ */
 function respawn(){
   B.x = spawn.x; B.z = spawn.z;
   B.heading = spawn.heading; B.speed = 0;
@@ -556,7 +642,7 @@ function respawn(){
   lastSampleX = B.x; lastSampleZ = B.z;
 }
 
-/* ------------------------------ кильватерный след ------------------------------ */
+/* ============================ кильватерный след ============================ */
 const NSEG = 200, SAMPLE_STEP = 0.22, WAKE_LIFE = 4.0;
 const wakePos  = new Float32Array(NSEG*2*3);
 const wakeData = new Float32Array(NSEG*2*2);
@@ -581,49 +667,64 @@ foam.frustumCulled = false; foam.renderOrder = 1;
 scene.add(foam);
 let wake = [], lastSampleX = 0, lastSampleZ = 0;
 
-/* ------------------------------ управление ------------------------------ */
+/* ============================ управление ============================ */
 const keys = {};
 addEventListener('keydown', e => {
   keys[e.code] = true;
   if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
   if (e.code === 'KeyR') respawn();
+  if (e.code === 'KeyC') debugGroup.visible = !debugGroup.visible;
+  if (e.code === 'KeyX') { collisionsEnabled = !collisionsEnabled;
+    console.log('[collisions]', collisionsEnabled ? 'ВКЛ' : 'ВЫКЛ'); }
+  if (e.code === 'KeyV') {
+    camMode = (camMode === 'iso') ? 'chase' : 'iso';
+    camPitch = CAM_PRESETS[camMode].pitch;
+    camDist  = CAM_PRESETS[camMode].dist;
+    console.log('[camera] режим:', camMode);
+  }
 });
 addEventListener('keyup', e => keys[e.code] = false);
 
-let dragging=false, lastX=0, lastY=0, camYaw=0, camPitch=0.32, camDist=9.0;
+let dragging=false, lastX=0, lastY=0;
+let camYaw = Math.PI*0.25;                 // базовый угол (для iso — диагональ)
+let camPitch = CAM_PRESETS.iso.pitch;
+let camDist  = CAM_PRESETS.iso.dist;
 canvas.addEventListener('mousedown', e => { dragging=true; lastX=e.clientX; lastY=e.clientY; });
 addEventListener('mouseup', () => dragging=false);
 addEventListener('mousemove', e => {
   if (!dragging) return;
   camYaw -= (e.clientX-lastX)*0.005;
-  camPitch = Math.min(1.15, Math.max(-0.1, camPitch + (e.clientY-lastY)*0.004));
+  camPitch = Math.min(1.45, Math.max(-0.1, camPitch + (e.clientY-lastY)*0.004));
   lastX=e.clientX; lastY=e.clientY;
 });
 canvas.addEventListener('wheel', e => {
-  camDist = Math.min(20, Math.max(4, camDist + e.deltaY*0.01));
+  camDist = Math.min(45, Math.max(4, camDist + e.deltaY*0.01));
   e.preventDefault();
 }, { passive:false });
 
-/* ------------------------------ состояние лодки ------------------------------ */
+/* ============================ состояние лодки ============================ */
 const B = { x:0, z:0, heading:0, speed:0, renderY:0, pitch:0, roll:0 };
 const spdEl = document.getElementById('spd');
 const camPos = new THREE.Vector3(0,5,10);
 let camInit = false;
 const damp = (cur,target,dt,tau) => cur + (target-cur)*(1-Math.exp(-dt/tau));
 
-/* ------------------------------ коллизии и границы ------------------------------ */
+/* ============================ границы и коллизии ============================ */
 function clampToWater(){
   if (!bounds) return;
   const M = BOAT_RADIUS + 0.4;
+  /* защита от вырожденной зоны (например, вертикально стоящий Plane) */
+  if (bounds.maxX - bounds.minX < M*3 || bounds.maxZ - bounds.minZ < M*3) return;
   const nx = THREE.MathUtils.clamp(B.x, bounds.minX + M, bounds.maxX - M);
   const nz = THREE.MathUtils.clamp(B.z, bounds.minZ + M, bounds.maxZ - M);
-  if (nx !== B.x || nz !== B.z){ B.x = nx; B.z = nz; B.speed *= 0.9; }
+  if (nx !== B.x || nz !== B.z){ B.x = nx; B.z = nz; B.speed *= 0.95; }
 }
 
 const _lp = new THREE.Vector3();
-function resolveCollisions(){
+function resolveCollisions(silent = false){
+  if (!collisionsEnabled) return;
   for (const c of colliders){
-    _lp.set(B.x, B.renderY, B.z).applyMatrix4(c.inv); // в локальные координаты забора
+    _lp.set(B.x, B.renderY, B.z).applyMatrix4(c.inv);
     const b = c.box, r = c.rLocal;
     if (_lp.x > b.min.x - r && _lp.x < b.max.x + r &&
         _lp.z > b.min.z - r && _lp.z < b.max.z + r){
@@ -634,14 +735,15 @@ function resolveCollisions(){
       else if (m === dx2) _lp.x = b.max.x + r;
       else if (m === dz1) _lp.z = b.min.z - r;
       else                _lp.z = b.max.z + r;
-      _lp.applyMatrix4(c.mat);       // обратно в мир
+      _lp.applyMatrix4(c.mat);
       B.x = _lp.x; B.z = _lp.z;
-      B.speed *= 0.55;               // удар о забор гасит скорость
+      /* гасим скорость только при ощутимом ударе — скольжение вдоль забора не стопорит */
+      if (!silent && m > 0.05) B.speed *= 0.6;
     }
   }
 }
 
-/* ------------------------------ карточка POI ------------------------------ */
+/* ============================ карточка POI ============================ */
 const poiEl = document.getElementById('poi');
 const poiImg = document.getElementById('poi-img');
 const poiTitle = document.getElementById('poi-title');
@@ -660,13 +762,13 @@ function updatePOI(){
   let best = null, bestD = Infinity;
   for (const p of pois){
     const d = Math.hypot(B.x - p.x, B.z - p.z);
-    const limit = (p === activePoi) ? POI_RADIUS * 1.35 : POI_RADIUS; // гистерезис
+    const limit = (p === activePoi) ? POI_RADIUS * 1.35 : POI_RADIUS;
     if (d < limit && d < bestD){ best = p; bestD = d; }
   }
   if (best !== activePoi){ activePoi = best; renderPoiCard(); }
 }
 
-/* ------------------------------ resize ------------------------------ */
+/* ============================ resize ============================ */
 function resize(){
   const w=innerWidth, h=innerHeight;
   renderer.setSize(w,h,false);
@@ -677,7 +779,7 @@ function resize(){
 addEventListener('resize', resize);
 resize();
 
-/* ------------------------------ главный цикл ------------------------------ */
+/* ============================ главный цикл ============================ */
 const _pv = new THREE.Matrix4();
 let t0 = performance.now(), last = t0;
 
@@ -756,18 +858,22 @@ function frame(now){
   wakeGeo.attributes.aData.needsUpdate = true;
   wakeGeo.setDrawRange(0, Math.max(0, count-1)*6);
 
-  /* --- буи-маркеры точек --- */
+  /* --- буи-маркеры --- */
   for (const p of pois){
-    p.marker.position.set(p.x,
-      seaLevel + 1.1 + Math.sin(time*1.6 + p.phase)*0.18, p.z);
+    p.marker.position.set(p.x, seaLevel + 1.1 + Math.sin(time*1.6 + p.phase)*0.18, p.z);
     const s = (p === activePoi) ? 1.5 : 1.0;
     p.marker.scale.setScalar(damp(p.marker.scale.x, s, dt, 0.15));
   }
   updatePOI();
 
-  /* --- камера --- */
+  /* --- камера (iso / chase) --- */
+  const preset = CAM_PRESETS[camMode];
+  if (Math.abs(camera.fov - preset.fov) > 0.05){
+    camera.fov = damp(camera.fov, preset.fov, dt, 0.25);
+    camera.updateProjectionMatrix();
+  }
   const tx=B.x, ty=B.renderY+0.55, tz=B.z;
-  const yaw = B.heading + Math.PI + camYaw;
+  const yaw = (preset.followHeading ? B.heading + Math.PI : 0) + camYaw;
   const cp = Math.cos(camPitch);
   const desired = new THREE.Vector3(
     tx + Math.sin(yaw)*cp*camDist,
